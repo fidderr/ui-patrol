@@ -137,6 +137,8 @@ import { DEFAULT_OUTPUT_DIR } from './defaults.js';
 export interface PatrolConfig {
   outputDir?: string;
   pages?: string;
+  /** Directory where `generate` saves generated page configs. Default: "." (project root) */
+  generateDir?: string;
   runner?: RunnerConfig;
   review?: ReviewConfig;
 }

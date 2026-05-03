@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PatrolRunner } from '../runner.js';
 import { PatrolReviewer } from '../reviewer.js';
+import { generatePage } from '../generate.js';
 import type { PageConfig, PatrolConfig, ReviewConfig, RunnerConfig } from '../config.js';
 import { resolvePaths } from '../config.js';
 import {
@@ -29,6 +30,7 @@ ui-patrol — Framework-agnostic UI testing tool with LLM-powered visual review
 USAGE:
   ui-patrol run     [options]   Navigate pages, click elements, take screenshots
   ui-patrol review  [options]   Send screenshots to an LLM for visual review
+  ui-patrol generate <url>      Auto-generate page config from a live URL
   ui-patrol init                Create a starter ui-patrol.config.ts
   ui-patrol example             Create an example pages.json showing the full flow
 
@@ -75,6 +77,17 @@ EXAMPLES:
 
   ui-patrol init
   ui-patrol example
+
+GENERATE OPTIONS:
+  ui-patrol generate <url>      Crawl a URL and generate a page config
+  --ai                          Use LLM to fill expectations and checks (keeps heuristic grouping)
+  --smart                       Use LLM for everything (regroup + fill expectations + detect flows)
+  --phase <name>                Phase/folder name (default: derived from URL)
+  --name <name>                 Page name (default: derived from URL)
+  --output <path>               Output file (default: auto-named in root or generateDir)
+  --api-url <url>               LLM API URL (for --ai and --smart)
+  --api-key <key>               LLM API key (for --ai and --smart)
+  --model <name>                LLM model (for --ai and --smart)
 `);
 }
 
@@ -91,6 +104,8 @@ function parseArgs(args: string[]): Record<string, string> {
       result[arg.slice(2)] = 'true';
     } else if (!result['_command']) {
       result['_command'] = arg;
+    } else if (!result['_arg']) {
+      result['_arg'] = arg;
     }
   }
 
@@ -650,6 +665,54 @@ async function reviewCommand(args: Record<string, string>): Promise<void> {
   process.exit(report.summary.failed > 0 ? 1 : 0);
 }
 
+// ── Generate command ─────────────────────────────────────────────
+
+async function generateCommand(args: Record<string, string>): Promise<void> {
+  const fileConfig = await loadConfigFile(args['config']);
+  const url = args['_arg'];
+
+  if (!url) {
+    console.error('Error: provide a URL. Example: ui-patrol generate /dashboard');
+    process.exit(1);
+  }
+
+  const fileReview: ReviewConfig = fileConfig.review ?? {};
+
+  const mode = args['smart'] ? 'smart' : args['ai'] ? 'ai' : 'none';
+
+  const config = await generatePage(url, {
+    baseUrl: args['base-url'] ?? fileConfig.runner?.baseUrl,
+    browser: (args['browser'] as 'chromium' | 'firefox' | 'webkit') ?? fileConfig.runner?.browser,
+    headless: !args['headed'],
+    phase: args['phase'],
+    name: args['name'],
+    mode,
+    review: {
+      apiUrl: args['api-url'] ?? fileReview.apiUrl,
+      apiKey: args['api-key'] ?? fileReview.apiKey,
+      model: args['model'] ?? fileReview.model,
+    },
+  });
+
+  const json = JSON.stringify([config], null, 2) + '\n';
+
+  // Output: --output flag > generateDir from config > current directory
+  const outputPath = args['output'];
+  if (outputPath) {
+    const dir = path.dirname(outputPath);
+    if (dir !== '.') fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(outputPath, json, 'utf-8');
+    console.log(`\n✅ Saved to ${outputPath}`);
+  } else {
+    const generateDir = fileConfig.generateDir ?? '.';
+    const filename = `${config.phase}-${config.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.json`;
+    const filePath = path.join(generateDir, filename);
+    if (generateDir !== '.') fs.mkdirSync(generateDir, { recursive: true });
+    fs.writeFileSync(filePath, json, 'utf-8');
+    console.log(`\n✅ Saved to ${filePath}`);
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -673,6 +736,9 @@ async function main(): Promise<void> {
       break;
     case 'review':
       await reviewCommand(args);
+      break;
+    case 'generate':
+      await generateCommand(args);
       break;
     default:
       console.error(`Unknown command: ${command}`);

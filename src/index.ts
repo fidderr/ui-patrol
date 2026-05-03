@@ -79,6 +79,9 @@ export type { RunResult, LogEntry } from './runner.js';
 export { PatrolReviewer } from './reviewer.js';
 export type { ReviewItem, ReviewResult, ReviewReport } from './reviewer.js';
 
+// Discover
+export { generatePage, type DiscoverOptions } from './generate.js';
+
 // Console capture helper
 export { createConsoleCapture } from './helpers/console-capture.js';
 export type { ConsoleCapture, ConsoleFinding } from './helpers/console-capture.js';
