@@ -1,0 +1,55 @@
+{
+  "name": "ui-patrol",
+  "version": "0.1.1",
+  "description": "Framework-agnostic UI testing tool.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "ui-patrol": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./config": {
+      "import": "./dist/config.js",
+      "require": "./dist/config.js",
+      "types": "./dist/config.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node ./dist/postinstall.js || true"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.40.0",
+    "playwright": ">=1.40.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.0",
+    "typescript": "^5.5.0"
+  },
+  "keywords": [
+    "playwright",
+    "ui-testing",
+    "screenshot",
+    "visual-review",
+    "llm",
+    "e2e",
+    "qa",
+    "framework-agnostic",
+    "ui-patrol"
+  ]
+}
