@@ -33,6 +33,7 @@ Or with npx directly:
 npx ui-patrol run             # take screenshots
 npx ui-patrol run --review    # screenshots + LLM review
 npx ui-patrol review          # LLM review on existing screenshots
+npx ui-patrol generate /login # auto-generate page config from a live URL
 npx ui-patrol init            # regenerate config
 npx ui-patrol example         # regenerate example pages.json
 ```
@@ -178,6 +179,7 @@ export default defineConfig({
 |-------|------|---------|-------------|
 | `outputDir` | `string` | `"./ui-patrol"` | Parent folder for all generated output (screenshots, logs) |
 | `pages` | `string` | `"pages.json"` | Path to pages JSON file or directory of JSON files |
+| `generateDir` | `string` | `"."` | Directory where `generate` saves page configs |
 | `runner` | `object` | `{}` | Runner configuration (see below) |
 | `review` | `object` | `{}` | LLM review configuration (see below) |
 
@@ -229,6 +231,7 @@ Any OpenAI-compatible `/v1/chat/completions` endpoint works:
 | `ui-patrol run [options]` | Navigate pages, click elements, take screenshots |
 | `ui-patrol run --review [options]` | Same + LLM review after |
 | `ui-patrol review [options]` | LLM review on existing screenshots |
+| `ui-patrol generate <url> [options]` | Auto-generate page config from a live URL |
 | `ui-patrol init` | Generate config file with all options |
 | `ui-patrol example` | Generate example `pages.json` |
 | `ui-patrol help` | Show help |
@@ -271,6 +274,20 @@ Pass extra flags with `--`: `npm run patrol -- --page "Login"`
 | `--page <name>` | Only review a specific page |
 | `--report <path>` | Override report output path |
 
+### Generate Options
+
+| Flag | Description |
+|---|---|
+| `<url>` | URL path to crawl (e.g., `/login`, `/dashboard`) |
+| `--ai` | Use LLM to fill expectations and checks (keeps heuristic grouping) |
+| `--smart` | Use LLM for everything: fill + reorganize + detect flows |
+| `--phase <name>` | Override phase/folder name (default: derived from URL) |
+| `--name <name>` | Override page name (default: derived from URL) |
+| `--output <path>` | Output file path (default: auto-named in project root) |
+| `--api-url <url>` | LLM API URL (for `--ai` and `--smart`) |
+| `--api-key <key>` | LLM API key (for `--ai` and `--smart`) |
+| `--model <name>` | LLM model (for `--ai` and `--smart`) |
+
 ### Examples
 
 ```bash
@@ -297,10 +314,61 @@ ui-patrol run --device "iPhone 14"
 ui-patrol review
 ui-patrol review --page "Dashboard"
 
+# Generate page configs from live URLs
+ui-patrol generate /login                          # heuristic only, no LLM
+ui-patrol generate /login --ai                     # LLM fills expectations/checks
+ui-patrol generate /login --smart                  # LLM fills + reorganizes + detects flows
+ui-patrol generate /login --smart --output pages/login.json
+
 # Pipe from any language
 php artisan generate:pages | ui-patrol run --pages -
 python generate_pages.py | ui-patrol run --pages -
 cargo run --bin pages | ui-patrol run --pages -
+```
+
+---
+
+## Auto-Generate Page Configs
+
+Instead of writing `pages.json` by hand, use `generate` to crawl a live URL and create the config automatically.
+
+### Three modes
+
+```bash
+# 1. Heuristic only — fast, no LLM needed
+ui-patrol generate /login
+
+# 2. AI — heuristic grouping + LLM fills expectations and checks
+ui-patrol generate /login --ai
+
+# 3. Smart — heuristic + LLM fills + LLM reorganizes into logical test flows
+ui-patrol generate /login --smart
+```
+
+**Heuristic mode** crawls the page, finds all interactive elements (buttons, links, inputs, tabs), and groups them intelligently:
+- Detects login forms (email + password + submit) and creates a "Login flow" with pre-filled credentials
+- Groups form inputs with their submit button
+- Filters out header chrome (theme toggles, language switchers)
+- Separates content links from navigation
+
+**AI mode** does everything heuristic does, then sends a screenshot to the LLM to fill in expectations and checks for each action.
+
+**Smart mode** does everything AI does, then sends the filled config back to the LLM for a second pass to reorganize groups into logical test flows (validation first, then main flow, then secondary actions), remove duplicates, and add page-level flags like `saveSession` on login pages.
+
+### Output location
+
+By default, files are saved to the project root with an auto-generated name. Override with `--output`:
+
+```bash
+ui-patrol generate /login --output pages/login.json
+```
+
+Or set a default directory in your config:
+
+```typescript
+export default defineConfig({
+  generateDir: './generated-pages',
+});
 ```
 
 ---
