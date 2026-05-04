@@ -1,9 +1,17 @@
 {
   "name": "ui-patrol",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Framework-agnostic UI testing tool.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fidderr/ui-patrol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fidderr/ui-patrol/issues"
+  },
+  "homepage": "https://github.com/fidderr/ui-patrol#readme",
   "bin": {
     "ui-patrol": "dist/cli/index.js"
   },
