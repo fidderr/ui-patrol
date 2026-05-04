@@ -328,9 +328,6 @@ ${exportLine}
     // Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
     // networkIdleWait: ${RUNNER_DEFAULTS.networkIdleWait},
 
-    // CSS selector to wait for instead of the default wait strategy
-    // waitForSelector: '#app',
-
     // Retries per element before marking it missing (default: ${ELEMENT_RETRIES})
     // retries: ${ELEMENT_RETRIES},
 
