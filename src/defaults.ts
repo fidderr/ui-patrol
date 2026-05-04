@@ -12,17 +12,12 @@ export const RUNNER_DEFAULTS = {
   browser: 'chromium' as const,
   headless: true,
   fullPage: true,
-  /**
-   * How long the DOM must be quiet (no mutations) before we consider the page settled (ms).
-   * After network goes idle, we watch for DOM changes. Once nothing changes for this
-   * duration, we take the screenshot.
-   */
-  domSettleTimeout: 200,
-  /**
-   * Maximum time to wait for the DOM to settle after network idle (ms).
-   * If the DOM keeps changing beyond this, we give up and move on.
-   */
-  domSettleMax: 5000,
+  /** Max ms to wait for network to go quiet (no pending requests for 500ms) */
+  networkIdleWait: 100,
+  /** Ms the DOM must be quiet (no mutations) before considered settled */
+  domIdleWait: 100,
+  /** Max ms to wait for DOM to settle — gives up if DOM keeps changing */
+  domIdleMax: 5_000,
 } as const;
 
 /** How long to wait for an element to appear before marking it missing (ms) */
@@ -30,9 +25,6 @@ export const ELEMENT_WAIT = 5_000;
 
 /** Default number of retries for locating an element before marking it missing */
 export const ELEMENT_RETRIES = 2;
-
-/** How long to wait for network to settle after an action (ms) */
-export const NETWORK_IDLE_TIMEOUT = 5_000;
 
 // ── Review defaults ─────────────────────────────────────────────
 

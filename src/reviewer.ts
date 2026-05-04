@@ -11,7 +11,7 @@ export interface ReviewItem {
   page: string;
   url: string;
   action: string;
-  elementLabel: string | null;
+  elementName: string | null;
   screenshot: string;
   expectation: string;
   checks: string[];
@@ -21,7 +21,7 @@ export interface ReviewResult {
   page: string;
   url: string;
   action: string;
-  elementLabel: string | null;
+  elementName: string | null;
   screenshot: string;
   verdict: 'pass' | 'fail';
   reasoning: string;
@@ -114,7 +114,7 @@ export class PatrolReviewer {
         page: page.name,
         url: page.path,
         action: 'navigate',
-        elementLabel: null,
+        elementName: null,
         screenshot: path.join(screenshotDir, `${phaseFolder}/${pageSlug}/navigate.png`),
         expectation: page.expectation,
         checks: page.checks,
@@ -125,13 +125,13 @@ export class PatrolReviewer {
 
         for (let ai = 0; ai < group.actions.length; ai++) {
           const action = group.actions[ai];
-          const actionSlug = slugify(action.label);
+          const actionSlug = slugify(action.name);
 
           items.push({
             page: page.name,
             url: page.path,
-            action: 'click',
-            elementLabel: action.label,
+            action: action.typeText !== undefined ? 'type' : 'click',
+            elementName: action.name,
             screenshot: path.join(
               screenshotDir,
               `${phaseFolder}/${pageSlug}/${groupSlug}/${ai + 1}.${actionSlug}.png`,
@@ -169,7 +169,7 @@ export class PatrolReviewer {
           page: item.page,
           url: item.url,
           action: item.action,
-          elementLabel: item.elementLabel,
+          elementName: item.elementName,
           screenshot: item.screenshot,
           verdict: 'fail',
           reasoning: 'Screenshot file not found',
@@ -187,7 +187,7 @@ export class PatrolReviewer {
         page: item.page,
         url: item.url,
         action: item.action,
-        elementLabel: item.elementLabel,
+        elementName: item.elementName,
         screenshot: item.screenshot,
         verdict: llmResult.verdict,
         reasoning: llmResult.reasoning,
@@ -221,8 +221,8 @@ export class PatrolReviewer {
     const imageData = (await fsp.readFile(item.screenshot)).toString('base64');
 
     let context = `Page: ${item.page} (${item.url})`;
-    if (item.elementLabel) {
-      context += `\nAction: ${item.action} "${item.elementLabel}"`;
+    if (item.elementName) {
+      context += `\nAction: ${item.action} "${item.elementName}"`;
     } else {
       context += `\nAction: ${item.action}`;
     }

@@ -83,6 +83,9 @@ EXAMPLES:
 RUN OPTIONS (continued):
   --wait-for <selector> Wait for this CSS selector instead of the default wait strategy
   --retries <n>         Retries per element before marking missing (default: 2)
+  --network-idle-wait <ms>  Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
+  --dom-idle-wait <ms>      Ms the DOM must be quiet before screenshotting (default: ${RUNNER_DEFAULTS.domIdleWait})
+  --dom-idle-max <ms>       Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
 
 GENERATE OPTIONS:
   ui-patrol generate <url>      Crawl a URL and generate a page config
@@ -316,16 +319,16 @@ ${exportLine}
     // Take full-page screenshots (false for viewport-only)
     fullPage: ${RUNNER_DEFAULTS.fullPage},
 
-    // Ms the DOM must be quiet before taking screenshots (default: ${RUNNER_DEFAULTS.domSettleTimeout})
-    // domSettleTimeout: ${RUNNER_DEFAULTS.domSettleTimeout},
+    // Ms the DOM must be quiet before taking screenshots (default: ${RUNNER_DEFAULTS.domIdleWait})
+    // domIdleWait: ${RUNNER_DEFAULTS.domIdleWait},
 
-    // Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domSettleMax})
-    // domSettleMax: ${RUNNER_DEFAULTS.domSettleMax},
+    // Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
+    // domIdleMax: ${RUNNER_DEFAULTS.domIdleMax},
 
-    // Extra ms to wait after DOM settles — final buffer for canvas/WebGL (default: 0, off)
-    // idleWait: 0,
+    // Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
+    // networkIdleWait: ${RUNNER_DEFAULTS.networkIdleWait},
 
-    // CSS selector to wait for instead of DOM settle detection (most reliable for SPAs)
+    // CSS selector to wait for instead of the default wait strategy
     // waitForSelector: '#app',
 
     // Retries per element before marking it missing (default: ${ELEMENT_RETRIES})
@@ -399,7 +402,7 @@ function exampleCommand(): void {
           description: 'Click login link',
           actions: [
             {
-              label: 'Login link',
+              name: 'Login link',
               selector: 'a[href="/login"]',
               navigatesAway: true,
               expectation: 'Navigated to the login page. Login form is visible.',
@@ -421,7 +424,7 @@ function exampleCommand(): void {
           description: 'Submit empty form to trigger validation',
           actions: [
             {
-              label: 'Submit empty form',
+              name: 'Submit empty form',
               selector: 'button[type="submit"]',
               expectation: 'Validation errors appear below the email and password fields.',
               checks: ['red or warning-colored error messages are visible'],
@@ -442,23 +445,22 @@ function exampleCommand(): void {
           description: 'Fill credentials and submit',
           actions: [
             {
-              label: 'Fill email',
+              name: 'Fill email',
               selector: '#email',
               typeText: 'user@example.com',
               expectation: 'Email field is filled with user@example.com.',
               checks: [],
             },
             {
-              label: 'Fill password',
+              name: 'Fill password',
               selector: '#password',
               typeText: 'password',
               expectation: 'Password field is filled.',
               checks: [],
             },
             {
-              label: 'Click login',
+              name: 'Click login',
               selector: 'button[type="submit"]',
-              waitAfter: 3000,
               saveSession: true,
               expectation: 'Redirected to the authenticated homepage or dashboard.',
               checks: ['no longer on the login page'],
@@ -487,7 +489,7 @@ function exampleCommand(): void {
           description: 'Trigger logout',
           actions: [
             {
-              label: 'Navigate to logout',
+              name: 'Navigate to logout',
               selector: 'a[href="/logout"]',
               clearSession: true,
               expectation: 'Session cleared. Redirected to public page.',
@@ -555,6 +557,9 @@ async function runCommand(args: Record<string, string>): Promise<void> {
   if (args['viewport-only']) runnerConfig.fullPage = false;
   if (args['wait-for']) runnerConfig.waitForSelector = args['wait-for'];
   if (args['retries']) runnerConfig.retries = parseInt(args['retries'], 10);
+  if (args['network-idle-wait']) runnerConfig.networkIdleWait = parseInt(args['network-idle-wait'], 10);
+  if (args['dom-idle-wait']) runnerConfig.domIdleWait = parseInt(args['dom-idle-wait'], 10);
+  if (args['dom-idle-max']) runnerConfig.domIdleMax = parseInt(args['dom-idle-max'], 10);
 
   const runner = new PatrolRunner(runnerConfig, paths.outputDir);
   const result = await runner.launch(allPages);
@@ -583,8 +588,8 @@ async function runCommand(args: Record<string, string>): Promise<void> {
     const report = await reviewer.review(items, {
       pageFilter: args['page'],
       onProgress: (index, total, item, reviewResult) => {
-        const label = item.elementLabel
-          ? `${item.page} — ${item.action}: ${item.elementLabel}`
+        const label = item.elementName
+          ? `${item.page} — ${item.action}: ${item.elementName}`
           : `${item.page} — ${item.action}`;
         const prefix = `[${index + 1}/${total}]`;
 
@@ -669,8 +674,8 @@ async function reviewCommand(args: Record<string, string>): Promise<void> {
   const report = await reviewer.review(items, {
     pageFilter: args['page'],
     onProgress: (index, total, item, result) => {
-      const label = item.elementLabel
-        ? `${item.page} — ${item.action}: ${item.elementLabel}`
+      const label = item.elementName
+        ? `${item.page} — ${item.action}: ${item.elementName}`
         : `${item.page} — ${item.action}`;
       const prefix = `[${index + 1}/${total}]`;
 

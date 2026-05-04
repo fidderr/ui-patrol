@@ -5,15 +5,13 @@
  * and LLM prompt is derived from the data structures below.
  *
  * When you add/change a field in config.ts:
- *   1. Update the corresponding entry in PAGE_FIELDS, ACTION_GROUP_FIELDS, or ACTION_FIELDS
- *   2. If it changes behavior, update BEHAVIORS
- *   3. Everything else (schema text, prompts) regenerates automatically
+ *   1. If it's a shared SharedOptions field, update SHARED_FIELDS
+ *   2. If it's page-only or action-only, update the respective array
+ *   3. If it changes behavior, update BEHAVIORS
+ *   4. Everything else (schema text, prompts) regenerates automatically
  */
 
 // ── Field Definitions ───────────────────────────────────────────
-// The actual source of truth. Every field that exists in the config
-// is defined here with its type, whether it's required, and a
-// description the LLM can understand.
 
 interface FieldDef {
   name: string;
@@ -22,20 +20,38 @@ interface FieldDef {
   description: string;
 }
 
-const PAGE_FIELDS: FieldDef[] = [
-  { name: 'path',            type: 'string',   required: true,  description: 'URL path, e.g. "/login"' },
-  { name: 'name',            type: 'string',   required: true,  description: 'human-readable page name' },
-  { name: 'phase',           type: 'string',   required: true,  description: 'screenshot folder name, e.g. "guest", "auth", "admin"' },
-  { name: 'expectation',     type: 'string',   required: true,  description: 'what the page should look like on initial load (1-2 sentences)' },
-  { name: 'checks',          type: 'string[]', required: true,  description: 'plain English statements that should be true when looking at the page' },
-  { name: 'actionGroups',    type: 'ActionGroup[]', required: true, description: 'groups of UI interactions to perform' },
-  { name: 'idleWait',        type: 'number',   required: false, description: 'extra ms to wait after DOM settles — final safety buffer for canvas/WebGL (default: 0, off)' },
-  { name: 'domSettleTimeout', type: 'number', required: false, description: 'ms the DOM must be quiet (no mutations) before page is considered settled (default: 200)' },
-  { name: 'domSettleMax',   type: 'number',   required: false, description: 'max ms to wait for DOM to settle — gives up if DOM keeps changing, e.g. animations (default: 5000)' },
-  { name: 'waitForSelector', type: 'string',   required: false, description: 'CSS selector to wait for instead of the default wait strategy (overrides networkidle + DOM settle + idleWait)' },
-  { name: 'retries',         type: 'number',   required: false, description: 'retries per element before marking missing (default: 2)' },
+/**
+ * Shared behavioral fields that exist on Action, PageConfig, and RunnerConfig.
+ * Mirrors the SharedOptions interface in config.ts.
+ */
+const SHARED_FIELDS: FieldDef[] = [
+  { name: 'networkIdleWait', type: 'number',   required: false, description: 'max ms to wait for network to go quiet (default: 100)' },
+  { name: 'domIdleWait',     type: 'number',   required: false, description: 'ms the DOM must be quiet (no mutations) before considered settled (default: 100)' },
+  { name: 'domIdleMax',      type: 'number',   required: false, description: 'max ms to wait for DOM to settle — gives up if DOM keeps changing (default: 5000)' },
+  { name: 'waitForSelector', type: 'string',   required: false, description: 'CSS selector to wait for instead of the default wait strategy' },
   { name: 'fullPage',        type: 'boolean',  required: false, description: 'false to capture viewport only instead of full scrollable page' },
-  { name: 'expectedErrors',  type: 'string[]', required: false, description: 'regex patterns for console errors to ignore, e.g. ["404", "Failed to fetch"]' },
+  { name: 'retries',         type: 'number',   required: false, description: 'retries per element before marking missing (default: 2)' },
+  { name: 'screenshot',         type: 'boolean',  required: false, description: 'false to skip screenshots (actions still run)' },
+  { name: 'screenshotSelector', type: 'string',  required: false, description: 'CSS selector of element to screenshot instead of full page (use for dropdowns, popovers, modals)' },
+];
+
+/**
+ * Testable fields shared between Action and PageConfig (not RunnerConfig).
+ * Mirrors the TestableOptions interface in config.ts.
+ */
+const TESTABLE_FIELDS: FieldDef[] = [
+  { name: 'name',           type: 'string',   required: true,  description: 'human-readable name' },
+  { name: 'expectation',    type: 'string',   required: true,  description: 'what the screenshot should show (for LLM review)' },
+  { name: 'checks',         type: 'string[]', required: true,  description: 'plain English checks the LLM reviewer should evaluate' },
+  { name: 'expectedErrors', type: 'string[]', required: false, description: 'regex patterns for expected console errors (filtered independently per level, no cascade)' },
+];
+
+const PAGE_FIELDS: FieldDef[] = [
+  { name: 'path',            type: 'string',        required: true,  description: 'URL path, e.g. "/login"' },
+  { name: 'phase',           type: 'string',        required: true,  description: 'screenshot folder name, e.g. "guest", "auth", "admin"' },
+  { name: 'actionGroups',    type: 'ActionGroup[]', required: true,  description: 'groups of UI interactions to perform' },
+  ...TESTABLE_FIELDS,
+  ...SHARED_FIELDS,
 ];
 
 const ACTION_GROUP_FIELDS: FieldDef[] = [
@@ -44,20 +60,18 @@ const ACTION_GROUP_FIELDS: FieldDef[] = [
 ];
 
 const ACTION_FIELDS: FieldDef[] = [
-  { name: 'label',              type: 'string',   required: true,  description: 'human-readable label for this action' },
   { name: 'selector',           type: 'string',   required: true,  description: 'CSS selector to find the element' },
-  { name: 'expectation',        type: 'string',   required: true,  description: 'what the screenshot should show after this action' },
-  { name: 'checks',             type: 'string[]', required: true,  description: 'plain English checks the reviewer should evaluate' },
+  ...TESTABLE_FIELDS,
   { name: 'typeText',           type: 'string',   required: false, description: 'fill element with this text instead of clicking' },
   { name: 'nth',                type: 'number',   required: false, description: '0-based index when selector matches multiple elements (default: 0)' },
   { name: 'navigatesAway',      type: 'boolean',  required: false, description: 'if true, page reloads to original URL after screenshot' },
-  { name: 'waitAfter',          type: 'number',   required: false, description: 'explicit wait in ms after action, skips the default wait strategy (use for animations, debounced inputs)' },
-  { name: 'screenshotSelector', type: 'string',   required: false, description: 'CSS selector of element to screenshot instead of full page (use for dropdowns, popovers, modals)' },
   { name: 'saveSession',        type: 'boolean',  required: false, description: 'save browser session (cookies, localStorage) after this action completes (use on login submit actions)' },
   { name: 'clearSession',       type: 'boolean',  required: false, description: 'clear browser session after this action completes (use on logout actions to return to guest state)' },
+  ...SHARED_FIELDS,
 ];
 
 const BEHAVIORS: string[] = [
+  'Optional fields cascade: action → config → defaults (for actions), page → config → defaults (for page navigation)',
   'Between actionGroups the page reloads to a clean state',
   'Within an actionGroup, actions chain without reload (e.g. fill email → fill password → click submit)',
   'saveSession/clearSession are ACTION-level — put saveSession on the login submit action, not the page',
@@ -196,8 +210,6 @@ Fail example:
 }`;
 
 // ── Generate: AI Fill Prompt ────────────────────────────────────
-// Intentionally slim — the fill task only needs to understand
-// expectation and checks fields, not the full schema.
 
 export function buildAiFillPrompt(skeleton: { path: string; name: string }, skeletonJson: string, pageContext: string): string {
   return `You are filling in a UI test configuration for ui-patrol. The page is at "${skeleton.path}" called "${skeleton.name}".
@@ -260,7 +272,7 @@ Look at the attached screenshot. Improve the config by:
 Rules:
 - Keep the EXACT same selectors — do not change any selector value
 - Every action must have: ${getRequiredActionFieldNames()}
-- actionGroups use "description" (not "label")
+- actionGroups use "description" (not "name")
 - Do NOT invent new selectors that weren't in the original config
 - You may add page-level optional fields where appropriate:
 ${getOptionalPageFieldsHint()}

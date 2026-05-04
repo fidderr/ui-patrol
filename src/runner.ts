@@ -4,12 +4,13 @@ import * as path from 'path';
 import type { Page, Browser, BrowserContext } from '@playwright/test';
 import { createConsoleCapture, type ConsoleCapture } from './helpers/console-capture.js';
 import {
+  type Action,
   type PageConfig,
   type RunnerConfig,
   getNavScreenshotPath,
   getActionScreenshotPath,
 } from './config.js';
-import { RUNNER_DEFAULTS, ELEMENT_WAIT, ELEMENT_RETRIES, NETWORK_IDLE_TIMEOUT, DEFAULT_OUTPUT_DIR } from './defaults.js';
+import { RUNNER_DEFAULTS, ELEMENT_WAIT, ELEMENT_RETRIES, DEFAULT_OUTPUT_DIR } from './defaults.js';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ export interface LogEntry {
   page: string;
   pageName: string;
   action: 'navigate' | 'click' | 'type' | 'missing';
-  elementLabel?: string;
+  elementName?: string;
   screenshot: string;
   browserConsole: ConsoleCapture;
 }
@@ -36,11 +37,6 @@ export interface RunResult {
 
 // ── Runner ──────────────────────────────────────────────────────
 
-/**
- * Mutable handle to the current browser context and page.
- * Passed through the call chain so session save/clear can
- * tear down and recreate the context mid-run.
- */
 interface BrowserHandle {
   browser: Browser;
   context: BrowserContext;
@@ -55,9 +51,11 @@ export class PatrolRunner {
     ignoreHTTPSErrors?: boolean;
     waitForSelector?: string;
     retries?: number;
-    idleWait?: number;
-    domSettleTimeout: number;
-    domSettleMax: number;
+    networkIdleWait: number;
+    domIdleWait: number;
+    domIdleMax: number;
+    screenshot?: boolean;
+    screenshotSelector?: string;
   };
 
   private outputDir: string;
@@ -85,9 +83,11 @@ export class PatrolRunner {
       ignoreHTTPSErrors: config.ignoreHTTPSErrors,
       waitForSelector: config.waitForSelector,
       retries: config.retries,
-      idleWait: config.idleWait,
-      domSettleTimeout: config.domSettleTimeout ?? RUNNER_DEFAULTS.domSettleTimeout,
-      domSettleMax: config.domSettleMax ?? RUNNER_DEFAULTS.domSettleMax,
+      networkIdleWait: config.networkIdleWait ?? RUNNER_DEFAULTS.networkIdleWait,
+      domIdleWait: config.domIdleWait ?? RUNNER_DEFAULTS.domIdleWait,
+      domIdleMax: config.domIdleMax ?? RUNNER_DEFAULTS.domIdleMax,
+      screenshot: config.screenshot,
+      screenshotSelector: config.screenshotSelector,
     };
 
     this.outputDir = outputDir ?? DEFAULT_OUTPUT_DIR;
@@ -125,8 +125,7 @@ export class PatrolRunner {
     let handle = await this.createHandle(browser);
 
     for (let pi = 0; pi < pages.length; pi++) {
-      const pageConfig = pages[pi];
-      handle = await this.runPage(handle, pageConfig, pi, pages.length);
+      handle = await this.runPage(handle, pages[pi], pi, pages.length);
     }
 
     await handle.context.close();
@@ -138,7 +137,6 @@ export class PatrolRunner {
     return result;
   }
 
-  /** Create a fresh browser context + page, restoring session if available. */
   private async createHandle(browser: Browser): Promise<BrowserHandle> {
     const opts = this.buildContextOptions();
     if (this.hasSession && existsSync(this.sessionStatePath)) {
@@ -149,10 +147,6 @@ export class PatrolRunner {
     return { browser, context, page };
   }
 
-  /**
-   * Save the current session and recreate the context so the next page
-   * picks up the saved storageState.
-   */
   private async saveSession(handle: BrowserHandle): Promise<BrowserHandle> {
     console.log(`  💾 Saving session`);
     await handle.context.storageState({ path: this.sessionStatePath });
@@ -161,9 +155,6 @@ export class PatrolRunner {
     return this.createHandle(handle.browser);
   }
 
-  /**
-   * Clear the saved session and recreate the context without any stored state.
-   */
   private async clearSession(handle: BrowserHandle): Promise<BrowserHandle> {
     console.log(`  🔓 Clearing session`);
     await handle.context.close();
@@ -175,42 +166,59 @@ export class PatrolRunner {
   }
 
   /**
+   * Resolve wait parameters.
+   * For page navigation: page → config → defaults.
+   * For actions: action → config → defaults (page does not affect actions).
+   */
+  private resolveWaitParams(pageConfig: PageConfig, action?: Action) {
+    if (action) {
+      return {
+        networkIdleWait: action.networkIdleWait ?? this.config.networkIdleWait,
+        domIdleWait: action.domIdleWait ?? this.config.domIdleWait,
+        domIdleMax: action.domIdleMax ?? this.config.domIdleMax,
+        waitForSelector: action.waitForSelector ?? this.config.waitForSelector,
+      };
+    }
+    return {
+      networkIdleWait: pageConfig.networkIdleWait ?? this.config.networkIdleWait,
+      domIdleWait: pageConfig.domIdleWait ?? this.config.domIdleWait,
+      domIdleMax: pageConfig.domIdleMax ?? this.config.domIdleMax,
+      waitForSelector: pageConfig.waitForSelector ?? this.config.waitForSelector,
+    };
+  }
+
+  /**
    * Wait for the page to be ready for interaction/screenshots.
    *
-   * Strategy (in order of priority):
-   * 1. If `waitForSelector` is set (page-level or global), wait for that selector to be visible.
-   * 2. Otherwise: networkidle → DOM settle detection → optional idleWait buffer.
+   * Strategy:
+   * 1. If `waitForSelector` is set, wait for that selector to be visible.
+   * 2. Otherwise: networkidle → DOM settle detection.
    */
-  private async waitForIdle(page: Page, pageConfig?: PageConfig): Promise<void> {
-    // Strategy 1: explicit selector
-    const selector = pageConfig?.waitForSelector ?? this.config.waitForSelector;
-    if (selector) {
+  private async waitForIdle(page: Page, pageConfig: PageConfig, action?: Action): Promise<void> {
+    const { networkIdleWait, domIdleWait, domIdleMax, waitForSelector } = this.resolveWaitParams(pageConfig, action);
+
+    if (waitForSelector) {
       try {
-        await page.locator(selector).first().waitFor({ state: 'visible', timeout: NETWORK_IDLE_TIMEOUT });
+        await page.locator(waitForSelector).first().waitFor({ state: 'visible', timeout: networkIdleWait });
       } catch {
-        // Selector didn't appear in time — move on rather than failing the whole page.
+        // Selector didn't appear in time — move on.
       }
       return;
     }
 
-    // Wait for network to quiet down first
     try {
-      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT });
+      await page.waitForLoadState('networkidle', { timeout: networkIdleWait });
     } catch {
-      // Network didn't fully settle (WebSocket, SSE, polling) — move on.
+      // Network didn't fully settle — move on.
     }
 
-    // Strategy 2: DOM settle detection via MutationObserver
-    const settleTimeout = pageConfig?.domSettleTimeout ?? this.config.domSettleTimeout;
-    const settleMax = pageConfig?.domSettleMax ?? this.config.domSettleMax;
-
-    await page.evaluate(({ settleTimeout, settleMax }) => {
+    await page.evaluate(({ domIdleWait, domIdleMax }) => {
       return new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | null = null;
         const maxTimer = setTimeout(() => {
           observer.disconnect();
           resolve();
-        }, settleMax);
+        }, domIdleMax);
 
         const observer = new MutationObserver(() => {
           if (timer) clearTimeout(timer);
@@ -218,7 +226,7 @@ export class PatrolRunner {
             observer.disconnect();
             clearTimeout(maxTimer);
             resolve();
-          }, settleTimeout);
+          }, domIdleWait);
         });
 
         observer.observe(document.body, {
@@ -232,16 +240,40 @@ export class PatrolRunner {
           observer.disconnect();
           clearTimeout(maxTimer);
           resolve();
-        }, settleTimeout);
+        }, domIdleWait);
       });
-    }, { settleTimeout, settleMax });
-
-    // Optional final buffer after DOM settles
-    const wait = pageConfig?.idleWait ?? this.config.idleWait;
-    if (wait && wait > 0) {
-      await page.waitForTimeout(wait);
-    }
+    }, { domIdleWait, domIdleMax });
   }
+
+  // ── Reusable helpers ──────────────────────────────────────────
+
+  /** Navigate to a URL and wait for the page to settle. */
+  private async navigateTo(page: Page, url: string, pageConfig: PageConfig, action?: Action): Promise<void> {
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await this.waitForIdle(page, pageConfig, action);
+  }
+
+  /** Take a screenshot, respecting screenshotSelector and fullPage options. */
+  private async captureScreenshot(
+    page: Page,
+    filePath: string,
+    opts: { screenshotSelector?: string; fullPage?: boolean },
+  ): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+    if (opts.screenshotSelector) {
+      const target = page.locator(opts.screenshotSelector).nth(0);
+      const isVisible = await target.isVisible().catch(() => false);
+      if (isVisible) {
+        await target.screenshot({ path: filePath });
+        return;
+      }
+    }
+
+    await page.screenshot({ path: filePath, fullPage: opts.fullPage });
+  }
+
+  // ── Page + Action execution ─────────────────────────────────
 
   private async runPage(
     handle: BrowserHandle,
@@ -256,13 +288,18 @@ export class PatrolRunner {
     console.log(`\n${prefix} 📄 ${pageConfig.name} (${pageConfig.path})`);
 
     const navStart = Date.now();
-    await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
-    await this.waitForIdle(handle.page, pageConfig);
+    await this.navigateTo(handle.page, `${base}${pageConfig.path}`, pageConfig);
 
     const navSs = getNavScreenshotPath(pageConfig);
     const navFullPath = path.join(this.screenshotDir, navSs);
-    await fs.mkdir(path.dirname(navFullPath), { recursive: true });
-    await handle.page.screenshot({ path: navFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
+    const takeNavScreenshot = pageConfig.screenshot ?? this.config.screenshot ?? true;
+
+    if (takeNavScreenshot) {
+      await this.captureScreenshot(handle.page, navFullPath, {
+        screenshotSelector: pageConfig.screenshotSelector ?? this.config.screenshotSelector,
+        fullPage: pageConfig.fullPage ?? this.config.fullPage,
+      });
+    }
 
     const navMs = Date.now() - navStart;
     console.log(`  📸 navigate (${navMs}ms)`);
@@ -271,8 +308,8 @@ export class PatrolRunner {
       page: pageConfig.path,
       pageName: pageConfig.name,
       action: 'navigate',
-      screenshot: navSs,
-      browserConsole: this.filterExpectedErrors(consoleCapture.flush(), pageConfig),
+      screenshot: takeNavScreenshot ? navSs : '',
+      browserConsole: this.filterExpectedErrors(consoleCapture.flush(), pageConfig.expectedErrors),
     });
 
     handle = await this.runActionGroups(handle, pageConfig, consoleCapture);
@@ -280,10 +317,6 @@ export class PatrolRunner {
     return handle;
   }
 
-  /**
-   * Locate an element with retry logic.
-   * Returns the locator if found, or null after all retries are exhausted.
-   */
   private async locateWithRetry(
     page: Page,
     selector: string,
@@ -319,13 +352,12 @@ export class PatrolRunner {
       const group = pageConfig.actionGroups[gi];
 
       if (gi > 0) {
-        await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
-        await this.waitForIdle(handle.page, pageConfig);
+        await this.navigateTo(handle.page, `${base}${pageConfig.path}`, pageConfig);
       }
 
       for (let ai = 0; ai < group.actions.length; ai++) {
         const action = group.actions[ai];
-        const maxRetries = pageConfig.retries ?? this.config.retries ?? ELEMENT_RETRIES;
+        const maxRetries = action.retries ?? this.config.retries ?? ELEMENT_RETRIES;
         const nth = action.nth ?? 0;
 
         try {
@@ -333,12 +365,12 @@ export class PatrolRunner {
           const loc = await this.locateWithRetry(handle.page, action.selector, nth, maxRetries);
 
           if (!loc) {
-            console.log(`  ⚪ MISSING: ${action.label}`);
+            console.log(`  ⚪ MISSING: ${action.name}`);
             this.addEntry({
               page: pageConfig.path,
               pageName: pageConfig.name,
               action: 'missing',
-              elementLabel: action.label,
+              elementName: action.name,
               screenshot: '',
               browserConsole: { errors: [], warnings: [] },
             });
@@ -351,73 +383,59 @@ export class PatrolRunner {
             await loc.click();
           }
 
-          if (action.waitAfter) {
-            await handle.page.waitForTimeout(action.waitAfter);
-          } else {
-            await this.waitForIdle(handle.page, pageConfig);
-          }
+          await this.waitForIdle(handle.page, pageConfig, action);
 
           const ss = getActionScreenshotPath(pageConfig, group, action, ai);
           const ssFullPath = path.join(this.screenshotDir, ss);
-          await fs.mkdir(path.dirname(ssFullPath), { recursive: true });
+          const takeScreenshot = action.screenshot ?? this.config.screenshot ?? true;
 
-          if (action.screenshotSelector) {
-            const target = handle.page.locator(action.screenshotSelector).nth(0);
-            const isVisible = await target.isVisible().catch(() => false);
-            if (isVisible) {
-              await target.screenshot({ path: ssFullPath });
-            } else {
-              await handle.page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
-            }
-          } else {
-            await handle.page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
+          if (takeScreenshot) {
+            await this.captureScreenshot(handle.page, ssFullPath, {
+              screenshotSelector: action.screenshotSelector ?? this.config.screenshotSelector,
+              fullPage: action.fullPage ?? this.config.fullPage,
+            });
           }
 
           this.addEntry({
             page: pageConfig.path,
             pageName: pageConfig.name,
             action: action.typeText !== undefined ? 'type' : 'click',
-            elementLabel: action.label,
-            screenshot: ss,
-            browserConsole: this.filterExpectedErrors(consoleCapture.flush(), pageConfig),
+            elementName: action.name,
+            screenshot: takeScreenshot ? ss : '',
+            browserConsole: this.filterExpectedErrors(consoleCapture.flush(), action.expectedErrors),
           });
 
           const actionMs = Date.now() - actionStart;
           const actionType = action.typeText !== undefined ? 'type' : 'click';
-          console.log(`  📸 ${actionType}: ${action.label} (${actionMs}ms)`);
+          console.log(`  📸 ${actionType}: ${action.name} (${actionMs}ms)`);
 
           // Session management — happens immediately after the action
           if (action.saveSession) {
             consoleCapture.detach();
             handle = await this.saveSession(handle);
             consoleCapture = createConsoleCapture(handle.page);
-            // Navigate back since we have a fresh context
-            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
-            await this.waitForIdle(handle.page, pageConfig);
+            await this.navigateTo(handle.page, `${base}${pageConfig.path}`, pageConfig);
           }
 
           if (action.clearSession) {
             consoleCapture.detach();
             handle = await this.clearSession(handle);
             consoleCapture = createConsoleCapture(handle.page);
-            // Navigate back since we have a fresh context
-            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
-            await this.waitForIdle(handle.page, pageConfig);
+            await this.navigateTo(handle.page, `${base}${pageConfig.path}`, pageConfig);
           }
 
           if (action.navigatesAway && !action.saveSession && !action.clearSession) {
-            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
-            await this.waitForIdle(handle.page, pageConfig);
+            await this.navigateTo(handle.page, `${base}${pageConfig.path}`, pageConfig);
           }
         } catch (err) {
-          console.log(`  ❌ ERROR: ${action.label} — ${String(err).substring(0, 100)}`);
+          console.log(`  ❌ ERROR: ${action.name} — ${String(err).substring(0, 100)}`);
           this.addEntry({
             page: pageConfig.path,
             pageName: pageConfig.name,
             action: 'click',
-            elementLabel: `${action.label} (error: ${String(err)})`,
+            elementName: `${action.name} (error: ${String(err)})`,
             screenshot: '',
-            browserConsole: this.filterExpectedErrors(consoleCapture.flush(), pageConfig),
+            browserConsole: this.filterExpectedErrors(consoleCapture.flush(), action.expectedErrors),
           });
         }
       }
@@ -448,9 +466,9 @@ export class PatrolRunner {
     return opts;
   }
 
-  private filterExpectedErrors(capture: ConsoleCapture, pageConfig: PageConfig): ConsoleCapture {
-    if (!pageConfig.expectedErrors?.length) return capture;
-    const patterns = pageConfig.expectedErrors.map((p) => new RegExp(p));
+  private filterExpectedErrors(capture: ConsoleCapture, expectedErrors?: string[]): ConsoleCapture {
+    if (!expectedErrors?.length) return capture;
+    const patterns = expectedErrors.map((p) => new RegExp(p));
     return {
       errors: capture.errors.filter((e) => !patterns.some((re) => re.test(e.text))),
       warnings: capture.warnings,
@@ -513,7 +531,7 @@ export class PatrolRunner {
       console.log('\n🟠 MISSING ELEMENTS:');
       for (const entry of result.entries) {
         if (entry.action === 'missing') {
-          console.log(`  ⚪ [${entry.pageName}] ${entry.elementLabel}`);
+          console.log(`  ⚪ [${entry.pageName}] ${entry.elementName}`);
         }
       }
     }
@@ -523,7 +541,7 @@ export class PatrolRunner {
       for (const entry of result.entries) {
         if (entry.browserConsole.errors.length > 0) {
           console.log(`\n  📸 ${entry.screenshot || '(no screenshot)'}`);
-          console.log(`     ${entry.pageName} — ${entry.action}${entry.elementLabel ? ': ' + entry.elementLabel : ''}`);
+          console.log(`     ${entry.pageName} — ${entry.action}${entry.elementName ? ': ' + entry.elementName : ''}`);
           for (const err of entry.browserConsole.errors) {
             console.log(`     ❌ ${err.text.substring(0, 200)}`);
           }

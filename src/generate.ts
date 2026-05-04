@@ -321,7 +321,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
 
     if (emailInput) {
       loginActions.push({
-        label: 'Fill email',
+        name: 'Fill email',
         selector: emailInput.selector,
         typeText: 'user@example.com',
         expectation: '',
@@ -330,7 +330,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     }
     if (passwordInput) {
       loginActions.push({
-        label: 'Fill password',
+        name: 'Fill password',
         selector: passwordInput.selector,
         typeText: 'password',
         expectation: '',
@@ -339,9 +339,8 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     }
     if (submitBtn) {
       loginActions.push({
-        label: 'Submit login',
+        name: 'Submit login',
         selector: submitBtn.selector,
-        waitAfter: 3000,
         saveSession: true,
         expectation: '',
         checks: [],
@@ -354,7 +353,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
   } else if (isRegisterPage) {
     // Registration form: fill all inputs with placeholder data
     const regActions: Action[] = formInputs.map((el): Action => ({
-      label: el.placeholder || el.ariaLabel || el.text || `Fill ${el.type ?? el.tag}`,
+      name: el.placeholder || el.ariaLabel || el.text || `Fill ${el.type ?? el.tag}`,
       selector: el.selector,
       typeText: guessInputValue(el),
       expectation: '',
@@ -364,9 +363,8 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     const submitBtn = findSubmitButton(formButtons, ['register', 'sign', 'create', 'join']);
     if (submitBtn) {
       regActions.push({
-        label: submitBtn.text || 'Submit registration',
+        name: submitBtn.text || 'Submit registration',
         selector: submitBtn.selector,
-        waitAfter: 3000,
         expectation: '',
         checks: [],
       });
@@ -378,7 +376,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
   } else if (searchInput) {
     // Search form
     const searchActions: Action[] = [{
-      label: 'Type search query',
+      name: 'Type search query',
       selector: searchInput.selector,
       typeText: 'test',
       expectation: '',
@@ -388,7 +386,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     const searchBtn = findSubmitButton(formButtons, ['search', 'find', 'go']);
     if (searchBtn) {
       searchActions.push({
-        label: searchBtn.text || 'Submit search',
+        name: searchBtn.text || 'Submit search',
         selector: searchBtn.selector,
         expectation: '',
         checks: [],
@@ -412,7 +410,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     groups.push({
       description: 'Page actions',
       actions: interestingButtons.map((el): Action => ({
-        label: el.text || el.ariaLabel || 'Button',
+        name: el.text || el.ariaLabel || 'Button',
         selector: el.selector,
         expectation: '',
         checks: [],
@@ -426,7 +424,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     groups.push({
       description: 'Navigate links',
       actions: contentLinks.map((el): Action => ({
-        label: el.text || el.href || 'Link',
+        name: el.text || el.href || 'Link',
         selector: el.selector,
         navigatesAway: true,
         expectation: '',
@@ -440,7 +438,7 @@ function buildSmartGroups(elements: DiscoveredElement[], pagePath: string): Acti
     groups.push({
       description: 'Switch tabs',
       actions: tabs.map((el): Action => ({
-        label: el.text || 'Tab',
+        name: el.text || 'Tab',
         selector: el.selector,
         expectation: '',
         checks: [],
@@ -458,7 +456,7 @@ function buildGenericFormGroup(
   groups: ActionGroup[],
 ): void {
   const actions: Action[] = formInputs.map((el): Action => ({
-    label: el.placeholder || el.ariaLabel || el.text || `Fill ${el.type ?? el.tag}`,
+    name: el.placeholder || el.ariaLabel || el.text || `Fill ${el.type ?? el.tag}`,
     selector: el.selector,
     typeText: guessInputValue(el),
     expectation: '',
@@ -468,7 +466,7 @@ function buildGenericFormGroup(
   const submitBtn = findSubmitButton(formButtons, ['submit', 'save', 'send', 'create', 'add', 'update']);
   if (submitBtn) {
     actions.push({
-      label: submitBtn.text || 'Submit',
+      name: submitBtn.text || 'Submit',
       selector: submitBtn.selector,
       expectation: '',
       checks: [],
@@ -610,10 +608,9 @@ async function aiFill(skeleton: PageConfig, screenshot: Buffer, ctx: PageContext
       fill.description = orig.description;
       for (let ai = 0; ai < orig.actions.length && ai < fill.actions.length; ai++) {
         fill.actions[ai].selector = orig.actions[ai].selector;
-        fill.actions[ai].label = orig.actions[ai].label;
+        fill.actions[ai].name = orig.actions[ai].name;
         if (orig.actions[ai].typeText !== undefined) fill.actions[ai].typeText = orig.actions[ai].typeText;
         if (orig.actions[ai].navigatesAway) fill.actions[ai].navigatesAway = true;
-        if (orig.actions[ai].waitAfter) fill.actions[ai].waitAfter = orig.actions[ai].waitAfter;
         if (orig.actions[ai].saveSession) fill.actions[ai].saveSession = true;
         if (orig.actions[ai].clearSession) fill.actions[ai].clearSession = true;
       }
@@ -685,7 +682,7 @@ async function aiReorganize(filled: PageConfig, screenshot: Buffer, ctx: PageCon
     for (const group of reorganized.actionGroups) {
       if (!group.description) group.description = 'Unnamed group';
       for (const action of group.actions) {
-        if (!action.label) action.label = 'Unnamed action';
+        if (!action.name) action.name = 'Unnamed action';
         if (!action.selector) {
           console.warn(`⚠ LLM removed a selector, keeping original structure`);
           return filled;

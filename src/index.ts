@@ -59,6 +59,8 @@ export type {
   PageConfig,
   Action,
   ActionGroup,
+  SharedOptions,
+  TestableOptions,
   RunnerConfig,
   ReviewConfig,
   PatrolConfig,
