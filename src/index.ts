@@ -59,6 +59,8 @@ export type {
   PageConfig,
   Action,
   ActionGroup,
+  SharedOptions,
+  TestableOptions,
   RunnerConfig,
   ReviewConfig,
   PatrolConfig,
@@ -67,6 +69,7 @@ export type {
 export {
   RUNNER_DEFAULTS,
   REVIEW_DEFAULTS,
+  GENERATE_DEFAULTS,
   DEFAULT_OUTPUT_DIR,
   DEFAULT_PAGES_PATH,
 } from './defaults.js';
@@ -85,6 +88,9 @@ export { generatePage, type DiscoverOptions } from './generate.js';
 // Console capture helper
 export { createConsoleCapture } from './helpers/console-capture.js';
 export type { ConsoleCapture, ConsoleFinding } from './helpers/console-capture.js';
+
+// LLM knowledge (central prompts and instructions)
+export { REVIEWER_INSTRUCTIONS, JSON_SCHEMA_REFERENCE } from './llm-knowledge.js';
 
 // ── Patrol options & result ─────────────────────────────────────
 

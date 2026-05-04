@@ -1,7 +1,9 @@
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { slugify, type PageConfig } from './config.js';
 import { REVIEW_DEFAULTS } from './defaults.js';
+import { REVIEWER_INSTRUCTIONS } from './llm-knowledge.js';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -9,7 +11,7 @@ export interface ReviewItem {
   page: string;
   url: string;
   action: string;
-  elementLabel: string | null;
+  elementName: string | null;
   screenshot: string;
   expectation: string;
   checks: string[];
@@ -19,7 +21,7 @@ export interface ReviewResult {
   page: string;
   url: string;
   action: string;
-  elementLabel: string | null;
+  elementName: string | null;
   screenshot: string;
   verdict: 'pass' | 'fail';
   reasoning: string;
@@ -63,71 +65,8 @@ interface ReviewerConfig {
   model?: string;
   instructions?: string;
   timeout?: number;
+  appDescription?: string;
 }
-
-// ── Defaults ────────────────────────────────────────────────────
-
-const DEFAULT_INSTRUCTIONS = `# UI Patrol — Visual Reviewer
-
-You review screenshots from automated UI tests of web applications. Your job is to compare each screenshot against its expected description and verify specific checks.
-
-## What You Receive
-
-For each screenshot:
-- **Page name and URL** — which page this is
-- **Action** — what happened before the screenshot (navigate to page, click a button, fill a form, etc.)
-- **Expected** — a description of what the screenshot should show
-- **Checks** — specific things to verify (plain English statements that should be true)
-
-## How to Evaluate
-
-1. Look at the screenshot and read the expectation.
-2. Does the screenshot reasonably match the description? It doesn't need to be pixel-perfect — focus on whether the described content and structure are present.
-3. Go through each check. Each check is a statement that should be true when looking at the screenshot.
-4. If the expectation is met and all checks pass, verdict is "pass". If anything important is wrong, verdict is "fail".
-
-## What Counts as a Fail
-
-- Page is blank, shows an error page, or shows a loading spinner instead of content
-- Expected elements are missing (form fields, buttons, navigation, data)
-- Layout is clearly broken (overlapping text, elements off-screen, collapsed containers)
-- A check statement is clearly not true when looking at the screenshot
-
-## What Does NOT Count as a Fail
-
-- Minor cosmetic differences (font rendering, slight color variations, anti-aliasing)
-- Content differences that don't affect functionality (different user names, dates, row counts)
-- Elements that are present but styled slightly differently than described
-
-## Response Format
-
-Respond with ONLY valid JSON, no other text:
-
-{
-  "verdict": "pass",
-  "reasoning": "Brief 1-2 sentence explanation.",
-  "issues": []
-}
-
-- **verdict**: "pass" or "fail"
-- **reasoning**: what you observed, why you made this call
-- **issues**: array of specific problems found (empty array for pass)
-
-## Examples
-
-Pass example:
-{
-  "verdict": "pass",
-  "reasoning": "Login form is visible with email and password fields, submit button present, no errors shown.",
-  "issues": []
-}
-
-Fail example:
-{
-  "verdict": "fail",
-  "reasoning": "Page shows a 500 error instead of the expected dashboard with data table.",
-  "issues": ["500 Internal Server Error displayed", "No data table visible"]
-}`;
 
 // ── Reviewer ────────────────────────────────────────────────────
 
@@ -152,7 +91,12 @@ export class PatrolReviewer {
         this.instructions = config.instructions;
       }
     } else {
-      this.instructions = DEFAULT_INSTRUCTIONS;
+      this.instructions = REVIEWER_INSTRUCTIONS;
+    }
+
+    // Append app description to instructions if provided
+    if (config.appDescription) {
+      this.instructions += `\n\n## About This Application\n\n${config.appDescription}`;
     }
   }
 
@@ -170,7 +114,7 @@ export class PatrolReviewer {
         page: page.name,
         url: page.path,
         action: 'navigate',
-        elementLabel: null,
+        elementName: null,
         screenshot: path.join(screenshotDir, `${phaseFolder}/${pageSlug}/navigate.png`),
         expectation: page.expectation,
         checks: page.checks,
@@ -181,13 +125,13 @@ export class PatrolReviewer {
 
         for (let ai = 0; ai < group.actions.length; ai++) {
           const action = group.actions[ai];
-          const actionSlug = slugify(action.label);
+          const actionSlug = slugify(action.name);
 
           items.push({
             page: page.name,
             url: page.path,
-            action: 'click',
-            elementLabel: action.label,
+            action: action.typeText !== undefined ? 'type' : 'click',
+            elementName: action.name,
             screenshot: path.join(
               screenshotDir,
               `${phaseFolder}/${pageSlug}/${groupSlug}/${ai + 1}.${actionSlug}.png`,
@@ -225,7 +169,7 @@ export class PatrolReviewer {
           page: item.page,
           url: item.url,
           action: item.action,
-          elementLabel: item.elementLabel,
+          elementName: item.elementName,
           screenshot: item.screenshot,
           verdict: 'fail',
           reasoning: 'Screenshot file not found',
@@ -243,7 +187,7 @@ export class PatrolReviewer {
         page: item.page,
         url: item.url,
         action: item.action,
-        elementLabel: item.elementLabel,
+        elementName: item.elementName,
         screenshot: item.screenshot,
         verdict: llmResult.verdict,
         reasoning: llmResult.reasoning,
@@ -274,11 +218,11 @@ export class PatrolReviewer {
    * Send a single screenshot to the LLM via OpenAI-compatible API.
    */
   private async reviewScreenshot(item: ReviewItem): Promise<LlmVerdict> {
-    const imageData = fs.readFileSync(item.screenshot).toString('base64');
+    const imageData = (await fsp.readFile(item.screenshot)).toString('base64');
 
     let context = `Page: ${item.page} (${item.url})`;
-    if (item.elementLabel) {
-      context += `\nAction: ${item.action} "${item.elementLabel}"`;
+    if (item.elementName) {
+      context += `\nAction: ${item.action} "${item.elementName}"`;
     } else {
       context += `\nAction: ${item.action}`;
     }
@@ -299,8 +243,8 @@ export class PatrolReviewer {
           ],
         },
       ],
-      max_tokens: 1024,
-      temperature: 0.1,
+      max_tokens: REVIEW_DEFAULTS.maxTokens,
+      temperature: REVIEW_DEFAULTS.temperature,
     };
 
     const headers: Record<string, string> = {

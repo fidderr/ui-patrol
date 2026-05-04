@@ -11,6 +11,8 @@ import {
   REVIEW_DEFAULTS,
   DEFAULT_OUTPUT_DIR,
   DEFAULT_PAGES_PATH,
+  ELEMENT_RETRIES,
+  CONFIG_LOAD_TIMEOUT,
 } from '../defaults.js';
 
 // ── Config file names (checked in order) ────────────────────────
@@ -78,6 +80,14 @@ EXAMPLES:
   ui-patrol init
   ui-patrol example
 
+RUN OPTIONS (continued):
+  --wait-for <selector> CSS selector to also wait for after networkidle + DOM settle
+  --retries <n>         Retries per element before marking missing (default: 2)
+  --network-idle-wait <ms>  Ms the network must be quiet before settled (default: ${RUNNER_DEFAULTS.networkIdleWait})
+  --network-idle-max <ms>   Max ms to wait for network to settle (default: ${RUNNER_DEFAULTS.networkIdleMax})
+  --dom-idle-wait <ms>      Ms the DOM must be quiet before screenshotting (default: ${RUNNER_DEFAULTS.domIdleWait})
+  --dom-idle-max <ms>       Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
+
 GENERATE OPTIONS:
   ui-patrol generate <url>      Crawl a URL and generate a page config
   --ai                          Use LLM to fill expectations and checks (keeps heuristic grouping)
@@ -85,6 +95,7 @@ GENERATE OPTIONS:
   --phase <name>                Phase/folder name (default: derived from URL)
   --name <name>                 Page name (default: derived from URL)
   --output <path>               Output file (default: auto-named in root or generateDir)
+  --dry-run                     Print generated config to stdout instead of writing a file
   --api-url <url>               LLM API URL (for --ai and --smart)
   --api-key <key>               LLM API key (for --ai and --smart)
   --model <name>                LLM model (for --ai and --smart)
@@ -156,7 +167,7 @@ async function loadConfig(filePath: string): Promise<PatrolConfig> {
     try {
       const output = execSync(
         `npx tsx -e "import c from '${filePath.replace(/\\/g, '/')}'; process.stdout.write(JSON.stringify(c))"`,
-        { encoding: 'utf-8', timeout: 10_000 },
+        { encoding: 'utf-8', timeout: CONFIG_LOAD_TIMEOUT },
       );
       return JSON.parse(output) as PatrolConfig;
     } catch (err) {
@@ -309,8 +320,23 @@ ${exportLine}
     // Take full-page screenshots (false for viewport-only)
     fullPage: ${RUNNER_DEFAULTS.fullPage},
 
-    // Ms to wait after network idle before screenshotting
-    idleWait: ${RUNNER_DEFAULTS.idleWait},
+    // Ms the DOM must be quiet before taking screenshots (default: ${RUNNER_DEFAULTS.domIdleWait})
+    // domIdleWait: ${RUNNER_DEFAULTS.domIdleWait},
+
+    // Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
+    // domIdleMax: ${RUNNER_DEFAULTS.domIdleMax},
+
+    // Ms the network must be quiet before considered settled (default: ${RUNNER_DEFAULTS.networkIdleWait})
+    // networkIdleWait: ${RUNNER_DEFAULTS.networkIdleWait},
+
+    // Max ms to wait for network to settle (default: ${RUNNER_DEFAULTS.networkIdleMax})
+    // networkIdleMax: ${RUNNER_DEFAULTS.networkIdleMax},
+
+    // CSS selector to also wait for after networkidle + DOM settle
+    // waitForSelector: '#app',
+
+    // Retries per element before marking it missing (default: ${ELEMENT_RETRIES})
+    // retries: ${ELEMENT_RETRIES},
 
     // Viewport size (default: ${RUNNER_DEFAULTS.viewportWidth}x${RUNNER_DEFAULTS.viewportHeight})
     // viewportWidth: ${RUNNER_DEFAULTS.viewportWidth},
@@ -326,6 +352,9 @@ ${exportLine}
   review: {
     // OpenAI-compatible API endpoint
     apiUrl: '${REVIEW_DEFAULTS.apiUrl}',
+
+    // Describe your app so the LLM reviewer understands what it's looking at
+    // appDescription: 'E-commerce platform with product catalog, shopping cart, and checkout flow.',
 
     // API key from environment variable (only needed for hosted services)
     // apiKey: process.env.UI_PATROL_API_KEY,
@@ -377,7 +406,7 @@ function exampleCommand(): void {
           description: 'Click login link',
           actions: [
             {
-              label: 'Login link',
+              name: 'Login link',
               selector: 'a[href="/login"]',
               navigatesAway: true,
               expectation: 'Navigated to the login page. Login form is visible.',
@@ -399,7 +428,7 @@ function exampleCommand(): void {
           description: 'Submit empty form to trigger validation',
           actions: [
             {
-              label: 'Submit empty form',
+              name: 'Submit empty form',
               selector: 'button[type="submit"]',
               expectation: 'Validation errors appear below the email and password fields.',
               checks: ['red or warning-colored error messages are visible'],
@@ -412,7 +441,6 @@ function exampleCommand(): void {
       path: '/login',
       name: 'Login as user',
       phase: 'login',
-      saveSession: true,
       expectation:
         'Login form. Actions will fill credentials and submit to create an authenticated session.',
       checks: [],
@@ -421,23 +449,23 @@ function exampleCommand(): void {
           description: 'Fill credentials and submit',
           actions: [
             {
-              label: 'Fill email',
+              name: 'Fill email',
               selector: '#email',
               typeText: 'user@example.com',
               expectation: 'Email field is filled with user@example.com.',
               checks: [],
             },
             {
-              label: 'Fill password',
+              name: 'Fill password',
               selector: '#password',
               typeText: 'password',
               expectation: 'Password field is filled.',
               checks: [],
             },
             {
-              label: 'Click login',
+              name: 'Click login',
               selector: 'button[type="submit"]',
-              waitAfter: 3000,
+              saveSession: true,
               expectation: 'Redirected to the authenticated homepage or dashboard.',
               checks: ['no longer on the login page'],
             },
@@ -458,10 +486,22 @@ function exampleCommand(): void {
       path: '/logout',
       name: 'Logout',
       phase: 'logout',
-      clearSession: true,
       expectation: 'Logged out. Redirected to the public homepage or login page.',
       checks: ['page shows guest/public content'],
-      actionGroups: [],
+      actionGroups: [
+        {
+          description: 'Trigger logout',
+          actions: [
+            {
+              name: 'Navigate to logout',
+              selector: 'a[href="/logout"]',
+              clearSession: true,
+              expectation: 'Session cleared. Redirected to public page.',
+              checks: ['page shows guest/public content'],
+            },
+          ],
+        },
+      ],
     },
     {
       path: '/',
@@ -478,9 +518,9 @@ function exampleCommand(): void {
   console.log(`Created ${filePath}`);
   console.log('\nThis example shows:');
   console.log('  1. Guest pages — visit homepage and login page without auth');
-  console.log('  2. Login flow — fill credentials, submit, saveSession: true');
+  console.log('  2. Login flow — fill credentials, submit with saveSession: true on the action');
   console.log('  3. Authenticated pages — visit pages with the saved session');
-  console.log('  4. Logout — clearSession: true to wipe the session');
+  console.log('  4. Logout — click logout with clearSession: true on the action');
   console.log('  5. Guest again — verify auth is gone');
   console.log('\nEdit the selectors and URLs to match your app, then run:');
   console.log('  npx ui-patrol run');
@@ -519,6 +559,12 @@ async function runCommand(args: Record<string, string>): Promise<void> {
   if (args['headed']) runnerConfig.headless = false;
   if (args['device']) runnerConfig.device = args['device'];
   if (args['viewport-only']) runnerConfig.fullPage = false;
+  if (args['wait-for']) runnerConfig.waitForSelector = args['wait-for'];
+  if (args['retries']) runnerConfig.retries = parseInt(args['retries'], 10);
+  if (args['network-idle-wait']) runnerConfig.networkIdleWait = parseInt(args['network-idle-wait'], 10);
+  if (args['network-idle-max']) runnerConfig.networkIdleMax = parseInt(args['network-idle-max'], 10);
+  if (args['dom-idle-wait']) runnerConfig.domIdleWait = parseInt(args['dom-idle-wait'], 10);
+  if (args['dom-idle-max']) runnerConfig.domIdleMax = parseInt(args['dom-idle-max'], 10);
 
   const runner = new PatrolRunner(runnerConfig, paths.outputDir);
   const result = await runner.launch(allPages);
@@ -533,6 +579,7 @@ async function runCommand(args: Record<string, string>): Promise<void> {
       apiKey: args['api-key'] ?? fileReview.apiKey,
       model: args['model'] ?? fileReview.model,
       instructions: args['instructions'] ?? fileReview.instructions,
+      appDescription: fileReview.appDescription,
     };
 
     const reviewer = new PatrolReviewer(reviewConfig);
@@ -546,8 +593,8 @@ async function runCommand(args: Record<string, string>): Promise<void> {
     const report = await reviewer.review(items, {
       pageFilter: args['page'],
       onProgress: (index, total, item, reviewResult) => {
-        const label = item.elementLabel
-          ? `${item.page} — ${item.action}: ${item.elementLabel}`
+        const label = item.elementName
+          ? `${item.page} — ${item.action}: ${item.elementName}`
           : `${item.page} — ${item.action}`;
         const prefix = `[${index + 1}/${total}]`;
 
@@ -617,6 +664,7 @@ async function reviewCommand(args: Record<string, string>): Promise<void> {
     apiKey: args['api-key'] ?? fileReview.apiKey,
     model: args['model'] ?? fileReview.model,
     instructions: args['instructions'] ?? fileReview.instructions,
+    appDescription: fileReview.appDescription,
   };
 
   const reviewer = new PatrolReviewer(reviewConfig);
@@ -631,8 +679,8 @@ async function reviewCommand(args: Record<string, string>): Promise<void> {
   const report = await reviewer.review(items, {
     pageFilter: args['page'],
     onProgress: (index, total, item, result) => {
-      const label = item.elementLabel
-        ? `${item.page} — ${item.action}: ${item.elementLabel}`
+      const label = item.elementName
+        ? `${item.page} — ${item.action}: ${item.elementName}`
         : `${item.page} — ${item.action}`;
       const prefix = `[${index + 1}/${total}]`;
 
@@ -695,6 +743,12 @@ async function generateCommand(args: Record<string, string>): Promise<void> {
   });
 
   const json = JSON.stringify([config], null, 2) + '\n';
+
+  // --dry-run: print to stdout and exit
+  if (args['dry-run']) {
+    process.stdout.write(json);
+    return;
+  }
 
   // Output: --output flag > generateDir from config > current directory
   const outputPath = args['output'];
