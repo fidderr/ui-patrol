@@ -15,7 +15,7 @@ export interface SharedOptions {
   domIdleWait?: number;
   /** Max ms to wait for DOM to settle. Gives up if DOM keeps changing. Default: 5000. */
   domIdleMax?: number;
-  /** CSS selector to wait for instead of the default wait strategy (networkidle + DOM settle). */
+  /** CSS selector to also wait for after networkidle + DOM settle. All three run in sequence. */
   waitForSelector?: string;
   /** Take full-page screenshots (true) or viewport-only (false). Default: true. */
   fullPage?: boolean;

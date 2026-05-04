@@ -81,7 +81,7 @@ EXAMPLES:
   ui-patrol example
 
 RUN OPTIONS (continued):
-  --wait-for <selector> Wait for this CSS selector instead of the default wait strategy
+  --wait-for <selector> CSS selector to also wait for after networkidle + DOM settle
   --retries <n>         Retries per element before marking missing (default: 2)
   --network-idle-wait <ms>  Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
   --dom-idle-wait <ms>      Ms the DOM must be quiet before screenshotting (default: ${RUNNER_DEFAULTS.domIdleWait})
@@ -328,7 +328,7 @@ ${exportLine}
     // Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
     // networkIdleWait: ${RUNNER_DEFAULTS.networkIdleWait},
 
-    // CSS selector to wait for instead of the default wait strategy
+    // CSS selector to also wait for after networkidle + DOM settle
     // waitForSelector: '#app',
 
     // Retries per element before marking it missing (default: ${ELEMENT_RETRIES})

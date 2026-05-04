@@ -190,28 +190,22 @@ export class PatrolRunner {
   /**
    * Wait for the page to be ready for interaction/screenshots.
    *
-   * Strategy:
-   * 1. If `waitForSelector` is set, wait for that selector to be visible.
-   * 2. Otherwise: networkidle → DOM settle detection.
+   * All strategies run in sequence (AND, not OR):
+   * 1. Wait for network idle
+   * 2. Wait for DOM to settle (MutationObserver)
+   * 3. If `waitForSelector` is set, wait for that selector to be visible
    */
   private async waitForIdle(page: Page, pageConfig: PageConfig, action?: Action): Promise<void> {
     const { networkIdleWait, domIdleWait, domIdleMax, waitForSelector } = this.resolveWaitParams(pageConfig, action);
 
-    if (waitForSelector) {
-      try {
-        await page.locator(waitForSelector).first().waitFor({ state: 'visible', timeout: networkIdleWait });
-      } catch {
-        // Selector didn't appear in time — move on.
-      }
-      return;
-    }
-
+    // 1. Network idle
     try {
       await page.waitForLoadState('networkidle', { timeout: networkIdleWait });
     } catch {
       // Network didn't fully settle — move on.
     }
 
+    // 2. DOM settle
     await page.evaluate(({ domIdleWait, domIdleMax }) => {
       return new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -243,6 +237,15 @@ export class PatrolRunner {
         }, domIdleWait);
       });
     }, { domIdleWait, domIdleMax });
+
+    // 3. Wait for selector (if set)
+    if (waitForSelector) {
+      try {
+        await page.locator(waitForSelector).first().waitFor({ state: 'visible', timeout: networkIdleWait });
+      } catch {
+        // Selector didn't appear in time — move on.
+      }
+    }
   }
 
   // ── Reusable helpers ──────────────────────────────────────────

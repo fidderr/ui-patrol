@@ -54,11 +54,10 @@ After every navigation and action, the runner waits for the page to be ready:
 
 1. **Network idle** — Playwright waits until zero pending network requests for 500ms (handles async API calls automatically)
 2. **DOM settle** — A MutationObserver watches the DOM. Once no mutations happen for `domIdleWait` ms (default: 100ms), the page is considered settled. If the DOM keeps changing for longer than `domIdleMax` (default: 5000ms), it gives up and moves on.
-3. **Screenshot**
+3. **waitForSelector** — If set, waits for the specified CSS selector to be visible after network idle and DOM settle.
+4. **Screenshot**
 
-Alternatively, set `waitForSelector` to wait for a specific CSS selector to be visible instead of the default strategy. This is the most reliable option for SPAs with websockets or polling.
-
-All wait options can be overridden per action or per page.
+All three run in sequence (AND, not OR). `waitForSelector` is an additional check on top of the default strategy, not a replacement.
 
 ---
 
@@ -84,7 +83,7 @@ Each page is an object in the array. Pages execute in order.
 | `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
 | `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
 | `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
-| `waitForSelector` | `string` | no | Override: CSS selector to wait for instead of default strategy |
+| `waitForSelector` | `string` | no | Override: CSS selector to also wait for after networkidle + DOM settle |
 | `fullPage` | `boolean` | no | Override: `false` for viewport-only screenshots |
 | `retries` | `number` | no | Override: retries per element before marking missing |
 | `screenshot` | `boolean` | no | `false` to skip screenshots on this page |
@@ -120,7 +119,7 @@ A single UI interaction (click or type).
 | `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
 | `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
 | `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
-| `waitForSelector` | `string` | no | Override: CSS selector to wait for instead of default strategy |
+| `waitForSelector` | `string` | no | Override: CSS selector to also wait for after networkidle + DOM settle |
 | `fullPage` | `boolean` | no | Override: `false` for viewport-only screenshots |
 | `retries` | `number` | no | Override: retries per element before marking missing |
 | `screenshot` | `boolean` | no | `false` to skip the screenshot (action still runs) |
@@ -234,7 +233,7 @@ export default defineConfig({
 | `networkIdleWait` | `number` | `100` | Max ms to wait for network to go quiet |
 | `domIdleWait` | `number` | `100` | Ms the DOM must be quiet before settled |
 | `domIdleMax` | `number` | `5000` | Max ms to wait for DOM to settle |
-| `waitForSelector` | `string` | — | CSS selector to wait for instead of default strategy |
+| `waitForSelector` | `string` | — | CSS selector to also wait for after networkidle + DOM settle |
 | `retries` | `number` | `2` | Retries per element before marking missing |
 | `screenshot` | `boolean` | `true` | Set to `false` to skip all screenshots |
 | `screenshotSelector` | `string` | — | CSS selector of element to screenshot instead of full page |
@@ -301,7 +300,7 @@ Any OpenAI-compatible `/v1/chat/completions` endpoint works:
 | `--headed` | Run browser with visible window |
 | `--device <name>` | Device emulation |
 | `--viewport-only` | Viewport-only screenshots |
-| `--wait-for <selector>` | CSS selector to wait for instead of default strategy |
+| `--wait-for <selector>` | CSS selector to also wait for after networkidle + DOM settle |
 | `--retries <n>` | Retries per element before marking missing |
 | `--network-idle-wait <ms>` | Max ms to wait for network to go quiet |
 | `--dom-idle-wait <ms>` | Ms the DOM must be quiet before settled |
