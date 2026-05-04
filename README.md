@@ -42,11 +42,23 @@ npx ui-patrol example         # regenerate example pages.json
 
 1. You provide page configs as JSON (file, directory, or stdin)
 2. Pages execute in the order you provide them
-3. For each page: navigate → wait for network idle → wait `idleWait` → screenshot
-4. For each action: click/type → wait for network idle → wait `idleWait` → screenshot
-5. Browser console errors and warnings are captured per page/action
-6. `saveSession` / `clearSession` flags control auth state between pages
+3. For each page: navigate → wait for network idle → wait for DOM to settle → screenshot
+4. For each action: click/type → wait for network idle → wait for DOM to settle → screenshot
+5. Browser console errors and warnings are captured per page and per action
+6. `saveSession` / `clearSession` on actions control auth state between pages
 7. With `--review`: screenshots + expectations are sent to an LLM for visual verification
+
+### Wait Strategy
+
+After every navigation and action, the runner waits for the page to be ready:
+
+1. **Network idle** — Playwright waits until zero pending network requests for 500ms (handles async API calls automatically)
+2. **DOM settle** — A MutationObserver watches the DOM. Once no mutations happen for `domIdleWait` ms (default: 100ms), the page is considered settled. If the DOM keeps changing for longer than `domIdleMax` (default: 5000ms), it gives up and moves on.
+3. **Screenshot**
+
+Alternatively, set `waitForSelector` to wait for a specific CSS selector to be visible instead of the default strategy. This is the most reliable option for SPAs with websockets or polling.
+
+All wait options can be overridden per action or per page.
 
 ---
 
@@ -60,19 +72,25 @@ Default location: `pages.json` in project root.
 
 Each page is an object in the array. Pages execute in order.
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `path` | `string` | **yes** | — | URL path to visit (e.g., `"/login"`) |
-| `name` | `string` | **yes** | — | Human-readable page name |
-| `phase` | `string` | **yes** | — | Screenshot folder name (e.g., `"guest"`, `"auth"`) |
-| `expectation` | `string` | **yes** | — | What the page should look like (for LLM review) |
-| `checks` | `string[]` | **yes** | — | Plain English checks for the LLM to verify |
-| `actionGroups` | `ActionGroup[]` | **yes** | — | Groups of UI interactions (can be empty `[]`) |
-| `saveSession` | `boolean` | no | `false` | Save browser session (cookies, localStorage) after this page |
-| `clearSession` | `boolean` | no | `false` | Wipe saved session before this page |
-| `idleWait` | `number` | no | config value | Override idle wait for this page (ms) |
-| `fullPage` | `boolean` | no | config value | Override full-page screenshot (`false` for viewport-only) |
-| `expectedErrors` | `string[]` | no | `[]` | Regex patterns for expected console errors to ignore |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | `string` | **yes** | URL path to visit (e.g., `"/login"`) |
+| `name` | `string` | **yes** | Human-readable page name |
+| `phase` | `string` | **yes** | Screenshot folder name (e.g., `"guest"`, `"auth"`) |
+| `expectation` | `string` | **yes** | What the page should look like (for LLM review) |
+| `checks` | `string[]` | **yes** | Plain English checks for the LLM to verify |
+| `actionGroups` | `ActionGroup[]` | **yes** | Groups of UI interactions (can be empty `[]`) |
+| `expectedErrors` | `string[]` | no | Regex patterns for expected console errors on page navigation |
+| `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
+| `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
+| `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
+| `waitForSelector` | `string` | no | Override: CSS selector to wait for instead of default strategy |
+| `fullPage` | `boolean` | no | Override: `false` for viewport-only screenshots |
+| `retries` | `number` | no | Override: retries per element before marking missing |
+| `screenshot` | `boolean` | no | `false` to skip screenshots on this page |
+| `screenshotSelector` | `string` | no | CSS selector of element to screenshot instead of full page |
+
+Page-level options only affect the page navigation screenshot. They do **not** cascade to actions — actions use their own values or fall back to the config.
 
 ### ActionGroup
 
@@ -87,53 +105,74 @@ Groups of chained actions. Between groups, the page reloads for a clean state. W
 
 A single UI interaction (click or type).
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `label` | `string` | **yes** | — | Human-readable label |
-| `selector` | `string` | **yes** | — | CSS selector to find the element |
-| `expectation` | `string` | **yes** | — | What the screenshot should show after this action |
-| `checks` | `string[]` | **yes** | — | Plain English checks for the LLM |
-| `typeText` | `string` | no | — | Fill element with this text instead of clicking |
-| `navigatesAway` | `boolean` | no | `false` | Reload original page URL after taking the screenshot |
-| `waitAfter` | `number` | no | — | Explicit wait in ms (skips network idle wait) |
-| `screenshotSelector` | `string` | no | — | CSS selector of element to screenshot instead of full page |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | **yes** | Human-readable name |
+| `selector` | `string` | **yes** | CSS selector to find the element |
+| `expectation` | `string` | **yes** | What the screenshot should show after this action |
+| `checks` | `string[]` | **yes** | Plain English checks for the LLM |
+| `typeText` | `string` | no | Fill element with this text instead of clicking |
+| `nth` | `number` | no | 0-based index when selector matches multiple elements (default: 0) |
+| `navigatesAway` | `boolean` | no | Reload original page URL after taking the screenshot |
+| `saveSession` | `boolean` | no | Save browser session after this action completes |
+| `clearSession` | `boolean` | no | Clear browser session after this action completes |
+| `expectedErrors` | `string[]` | no | Regex patterns for expected console errors after this action |
+| `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
+| `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
+| `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
+| `waitForSelector` | `string` | no | Override: CSS selector to wait for instead of default strategy |
+| `fullPage` | `boolean` | no | Override: `false` for viewport-only screenshots |
+| `retries` | `number` | no | Override: retries per element before marking missing |
+| `screenshot` | `boolean` | no | `false` to skip the screenshot (action still runs) |
+| `screenshotSelector` | `string` | no | CSS selector of element to screenshot instead of full page |
+
+### Option Cascade
+
+Optional fields cascade: **action → config → defaults** for actions, **page → config → defaults** for page navigation. Page settings do not affect actions.
 
 ### Session Management
 
-Login is just a page with actions and `saveSession: true`. No separate auth config needed.
-
-- **`saveSession: true`** — After this page runs (including its actions), cookies and localStorage are saved. All following pages use that session.
-- **`clearSession: true`** — Before this page runs, the saved session is wiped. This page and all following pages run without authentication.
-
-You can have multiple login/logout cycles in one run:
+Session control is action-level. Put `saveSession` on the action that triggers login (e.g., the submit button click), and `clearSession` on the action that triggers logout.
 
 ```json
 [
-  { "phase": "guest", "path": "/", ... },
-  { "phase": "login", "path": "/login", "saveSession": true, ... },
-  { "phase": "user", "path": "/profile", ... },
-  { "phase": "logout", "path": "/", "clearSession": true, ... },
-  { "phase": "admin-login", "path": "/login", "saveSession": true, ... },
-  { "phase": "admin", "path": "/admin", ... }
+  {
+    "path": "/login", "name": "Login", "phase": "login",
+    "expectation": "Login form", "checks": [],
+    "actionGroups": [{
+      "description": "Fill credentials and submit",
+      "actions": [
+        { "name": "Fill email", "selector": "#email", "typeText": "user@example.com", "expectation": "", "checks": [] },
+        { "name": "Fill password", "selector": "#password", "typeText": "password", "expectation": "", "checks": [] },
+        { "name": "Submit", "selector": "button[type=\"submit\"]", "saveSession": true, "expectation": "Redirected to dashboard", "checks": ["not on login page"] }
+      ]
+    }]
+  },
+  {
+    "path": "/dashboard", "name": "Dashboard", "phase": "auth",
+    "expectation": "Authenticated dashboard", "checks": ["user menu visible"],
+    "actionGroups": []
+  },
+  {
+    "path": "/logout", "name": "Logout", "phase": "logout",
+    "expectation": "Logout page", "checks": [],
+    "actionGroups": [{
+      "description": "Trigger logout",
+      "actions": [
+        { "name": "Click logout", "selector": "a[href=\"/logout\"]", "clearSession": true, "expectation": "Redirected to public page", "checks": ["guest content visible"] }
+      ]
+    }]
+  }
 ]
 ```
 
-### Waiting Behavior
-
-After every navigation and action:
-1. Wait for **network idle** (Playwright waits until zero network requests for 500ms — handles async API calls automatically)
-2. Wait an extra **`idleWait`** buffer for the UI to re-render (default: 2 seconds)
-3. Take screenshot
-
-Override per page with `idleWait`, or per action with `waitAfter` (which replaces the network idle + idleWait with a fixed delay).
-
 ### Focused Screenshots
 
-For small UI elements like dropdowns or popovers, use `screenshotSelector` on an action to capture just that element instead of the full page:
+For small UI elements like dropdowns or popovers, use `screenshotSelector` to capture just that element:
 
 ```json
 {
-  "label": "Open role filter",
+  "name": "Open role filter",
   "selector": "button.filter-toggle",
   "screenshotSelector": ".floating-panel",
   "expectation": "Dropdown with role checkboxes",
@@ -156,8 +195,6 @@ Screenshots are auto-organized:
 
 Place `ui-patrol.config.ts` (or `.js` / `.json`) in your project root. Auto-detected by the CLI. Run `npx ui-patrol init` to generate one with all options.
 
-The config supports TypeScript — use `defineConfig()` for type checking and autocomplete:
-
 ```typescript
 import { defineConfig } from 'ui-patrol';
 
@@ -167,6 +204,7 @@ export default defineConfig({
   },
   review: {
     apiKey: process.env.UI_PATROL_API_KEY,
+    appDescription: 'E-commerce platform with product catalog, shopping cart, and checkout flow.',
   },
 });
 ```
@@ -177,24 +215,30 @@ export default defineConfig({
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `outputDir` | `string` | `"./ui-patrol"` | Parent folder for all generated output (screenshots, logs) |
-| `pages` | `string` | `"pages.json"` | Path to pages JSON file or directory of JSON files |
+| `outputDir` | `string` | `"./ui-patrol"` | Parent folder for all generated output |
+| `pages` | `string` | `"pages.json"` | Path to pages JSON file or directory |
 | `generateDir` | `string` | `"."` | Directory where `generate` saves page configs |
-| `runner` | `object` | `{}` | Runner configuration (see below) |
-| `review` | `object` | `{}` | LLM review configuration (see below) |
+| `runner` | `object` | `{}` | Runner configuration |
+| `review` | `object` | `{}` | LLM review configuration |
 
 ### `runner`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `baseUrl` | `string` | `"http://localhost:8000"` | Base URL of your application |
-| `browser` | `string` | `"chromium"` | Playwright browser: `"chromium"`, `"firefox"`, or `"webkit"` |
+| `browser` | `string` | `"chromium"` | `"chromium"`, `"firefox"`, or `"webkit"` |
 | `headless` | `boolean` | `true` | Run browser without visible window |
-| `viewportWidth` | `number` | `1280` | Browser viewport width in pixels |
-| `viewportHeight` | `number` | `720` | Browser viewport height in pixels |
-| `fullPage` | `boolean` | `true` | Take full-page screenshots (`false` for viewport-only) |
-| `idleWait` | `number` | `2000` | Ms to wait after network idle before screenshotting |
-| `device` | `string` | — | Playwright device emulation (e.g., `"iPhone 14"`, `"Pixel 7"`) |
+| `viewportWidth` | `number` | `1280` | Browser viewport width |
+| `viewportHeight` | `number` | `720` | Browser viewport height |
+| `fullPage` | `boolean` | `true` | Full-page screenshots (`false` for viewport-only) |
+| `networkIdleWait` | `number` | `100` | Max ms to wait for network to go quiet |
+| `domIdleWait` | `number` | `100` | Ms the DOM must be quiet before settled |
+| `domIdleMax` | `number` | `5000` | Max ms to wait for DOM to settle |
+| `waitForSelector` | `string` | — | CSS selector to wait for instead of default strategy |
+| `retries` | `number` | `2` | Retries per element before marking missing |
+| `screenshot` | `boolean` | `true` | Set to `false` to skip all screenshots |
+| `screenshotSelector` | `string` | — | CSS selector of element to screenshot instead of full page |
+| `device` | `string` | — | Playwright device emulation (e.g., `"iPhone 14"`) |
 | `ignoreHTTPSErrors` | `boolean` | `false` | Ignore self-signed certificate errors |
 
 ### `review`
@@ -202,10 +246,11 @@ export default defineConfig({
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `apiUrl` | `string` | `"http://localhost:8080/v1/chat/completions"` | OpenAI-compatible API endpoint |
-| `apiKey` | `string` | — | API key (use env var in TS config, or `--api-key` flag) |
-| `model` | `string` | `"local"` | Model name to use |
+| `apiKey` | `string` | — | API key |
+| `model` | `string` | `"local"` | Model name |
 | `instructions` | `string` | built-in | Custom LLM prompt (inline text or file path) |
 | `timeout` | `number` | `300000` | Request timeout in ms |
+| `appDescription` | `string` | — | Description of your app, included in LLM prompts for context |
 
 ### Compatible LLM Servers
 
@@ -229,12 +274,11 @@ Any OpenAI-compatible `/v1/chat/completions` endpoint works:
 | Command | Description |
 |---|---|
 | `ui-patrol run [options]` | Navigate pages, click elements, take screenshots |
-| `ui-patrol run --review [options]` | Same + LLM review after |
+| `ui-patrol run --review` | Same + LLM review after |
 | `ui-patrol review [options]` | LLM review on existing screenshots |
-| `ui-patrol generate <url> [options]` | Auto-generate page config from a live URL |
-| `ui-patrol init` | Generate config file with all options |
+| `ui-patrol generate <url>` | Auto-generate page config from a live URL |
+| `ui-patrol init` | Generate config file |
 | `ui-patrol example` | Generate example `pages.json` |
-| `ui-patrol help` | Show help |
 
 ### npm Scripts (auto-added on install)
 
@@ -243,8 +287,6 @@ Any OpenAI-compatible `/v1/chat/completions` endpoint works:
 | `npm run patrol` | `ui-patrol run` |
 | `npm run patrol:review` | `ui-patrol review` |
 | `npm run patrol:full` | `ui-patrol run --review` |
-
-Pass extra flags with `--`: `npm run patrol -- --page "Login"`
 
 ### Run Options
 
@@ -259,6 +301,11 @@ Pass extra flags with `--`: `npm run patrol -- --page "Login"`
 | `--headed` | Run browser with visible window |
 | `--device <name>` | Device emulation |
 | `--viewport-only` | Viewport-only screenshots |
+| `--wait-for <selector>` | CSS selector to wait for instead of default strategy |
+| `--retries <n>` | Retries per element before marking missing |
+| `--network-idle-wait <ms>` | Max ms to wait for network to go quiet |
+| `--dom-idle-wait <ms>` | Ms the DOM must be quiet before settled |
+| `--dom-idle-max <ms>` | Max ms to wait for DOM to settle |
 | `--review` | Also run LLM review after screenshots |
 
 ### Review Options
@@ -268,9 +315,9 @@ Pass extra flags with `--`: `npm run patrol -- --page "Login"`
 | `--pages <path>` | JSON file, directory, or `"-"` for stdin |
 | `--output-dir <dir>` | Override output directory |
 | `--api-url <url>` | Override LLM API URL |
-| `--api-key <key>` | API key (prefer env var instead) |
+| `--api-key <key>` | API key |
 | `--model <name>` | Override model name |
-| `--instructions <path>` | Custom LLM instruction file or inline text |
+| `--instructions <path>` | Custom LLM instruction file |
 | `--page <name>` | Only review a specific page |
 | `--report <path>` | Override report output path |
 
@@ -278,15 +325,16 @@ Pass extra flags with `--`: `npm run patrol -- --page "Login"`
 
 | Flag | Description |
 |---|---|
-| `<url>` | URL path to crawl (e.g., `/login`, `/dashboard`) |
-| `--ai` | Use LLM to fill expectations and checks (keeps heuristic grouping) |
-| `--smart` | Use LLM for everything: fill + reorganize + detect flows |
-| `--phase <name>` | Override phase/folder name (default: derived from URL) |
-| `--name <name>` | Override page name (default: derived from URL) |
-| `--output <path>` | Output file path (default: auto-named in project root) |
-| `--api-url <url>` | LLM API URL (for `--ai` and `--smart`) |
-| `--api-key <key>` | LLM API key (for `--ai` and `--smart`) |
-| `--model <name>` | LLM model (for `--ai` and `--smart`) |
+| `<url>` | URL path to crawl (e.g., `/login`) |
+| `--ai` | LLM fills expectations and checks |
+| `--smart` | LLM fills + reorganizes into logical test flows |
+| `--phase <name>` | Override phase name |
+| `--name <name>` | Override page name |
+| `--output <path>` | Output file path |
+| `--dry-run` | Print generated config to stdout instead of writing a file |
+| `--api-url <url>` | LLM API URL |
+| `--api-key <key>` | LLM API key |
+| `--model <name>` | LLM model |
 
 ### Examples
 
@@ -298,9 +346,6 @@ ui-patrol run --pages ./pages.json --review
 # Override base URL
 ui-patrol run --base-url http://localhost:1420
 
-# Directory of page files
-ui-patrol run --pages ./my-pages/
-
 # Single page
 ui-patrol run --page "Admin Dashboard"
 
@@ -310,20 +355,24 @@ ui-patrol run --browser firefox --headed
 # Mobile emulation
 ui-patrol run --device "iPhone 14"
 
+# Custom wait strategy
+ui-patrol run --wait-for "#app-loaded"
+ui-patrol run --dom-idle-wait 500 --dom-idle-max 10000
+
 # Review existing screenshots
 ui-patrol review
 ui-patrol review --page "Dashboard"
 
-# Generate page configs from live URLs
-ui-patrol generate /login                          # heuristic only, no LLM
-ui-patrol generate /login --ai                     # LLM fills expectations/checks
-ui-patrol generate /login --smart                  # LLM fills + reorganizes + detects flows
+# Generate page configs
+ui-patrol generate /login
+ui-patrol generate /login --ai
+ui-patrol generate /login --smart
 ui-patrol generate /login --smart --output pages/login.json
+ui-patrol generate /dashboard --dry-run | jq .
 
 # Pipe from any language
 php artisan generate:pages | ui-patrol run --pages -
 python generate_pages.py | ui-patrol run --pages -
-cargo run --bin pages | ui-patrol run --pages -
 ```
 
 ---
@@ -346,29 +395,19 @@ ui-patrol generate /login --smart
 ```
 
 **Heuristic mode** crawls the page, finds all interactive elements (buttons, links, inputs, tabs), and groups them intelligently:
-- Detects login forms (email + password + submit) and creates a "Login flow" with pre-filled credentials
-- Groups form inputs with their submit button
+- Detects login forms, registration forms, and search forms
+- Creates flows with pre-filled test data based on input types
 - Filters out header chrome (theme toggles, language switchers)
-- Separates content links from navigation
+- Warns about non-unique selectors (add `data-testid` for better coverage)
 
-**AI mode** does everything heuristic does, then sends a screenshot to the LLM to fill in expectations and checks for each action.
+**AI mode** does everything heuristic does, then sends a screenshot to the LLM to fill in expectations and checks.
 
-**Smart mode** does everything AI does, then sends the filled config back to the LLM for a second pass to reorganize groups into logical test flows (validation first, then main flow, then secondary actions), remove duplicates, and add page-level flags like `saveSession` on login pages.
+**Smart mode** does everything AI does, then reorganizes groups into logical test flows (validation first, then main flow, then secondary actions).
 
-### Output location
-
-By default, files are saved to the project root with an auto-generated name. Override with `--output`:
+Use `--dry-run` to preview the generated config without writing a file:
 
 ```bash
-ui-patrol generate /login --output pages/login.json
-```
-
-Or set a default directory in your config:
-
-```typescript
-export default defineConfig({
-  generateDir: './generated-pages',
-});
+ui-patrol generate /login --smart --dry-run | jq .
 ```
 
 ---
@@ -377,18 +416,17 @@ export default defineConfig({
 
 ```
 ui-patrol/
-├── .gitignore                    # auto-created, ignores all output
+├── .gitignore
 ├── screenshots/
-│   ├── {phase}/
-│   │   └── {page-slug}/
-│   │       ├── navigate.png
-│   │       └── {group-slug}/
-│   │           ├── 1.{action-slug}.png
-│   │           └── 2.{action-slug}.png
+│   └── {phase}/{page-slug}/
+│       ├── navigate.png
+│       └── {group-slug}/
+│           ├── 1.{action-slug}.png
+│           └── 2.{action-slug}.png
 └── logs/
-    ├── ui-patrol-log.json        # run results (entries, errors, summary)
-    ├── ui-patrol-pages.json      # saved page configs from last run
-    └── ui-patrol-review.json     # LLM review report
+    ├── ui-patrol-log.json
+    ├── ui-patrol-pages.json
+    └── ui-patrol-review.json
 ```
 
 ---
@@ -442,15 +480,6 @@ test('full UI patrol with LLM review', async ({ browser }) => {
 const { run } = await patrol(pages, { baseUrl: 'http://localhost:3000' });
 ```
 
-### Override review settings programmatically
-
-```typescript
-const { run, review } = await patrol(pages, {
-  review: true,
-  reviewConfig: { apiUrl: 'https://api.openai.com/v1/chat/completions' },
-});
-```
-
 ---
 
 ## Generating Pages JSON
@@ -458,7 +487,7 @@ const { run, review } = await patrol(pages, {
 The package only cares about valid JSON. Generate it however you want:
 
 - **Hand-written** — just write `pages.json`
-- **TypeScript** — use the exported `PageConfig` type for autocomplete, serialize to JSON
+- **TypeScript** — use the exported types for autocomplete
 - **PHP** — `json_encode()` an array
 - **Python** — `json.dump()` a dict
 - **Rust** — `serde_json::to_string()` a struct
