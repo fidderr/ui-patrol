@@ -1,4 +1,5 @@
-import * as fs from 'fs';
+import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 import type { Page, Browser, BrowserContext } from '@playwright/test';
 import { createConsoleCapture, type ConsoleCapture } from './helpers/console-capture.js';
@@ -8,7 +9,7 @@ import {
   getNavScreenshotPath,
   getActionScreenshotPath,
 } from './config.js';
-import { RUNNER_DEFAULTS, ELEMENT_WAIT, NETWORK_IDLE_TIMEOUT, DEFAULT_OUTPUT_DIR } from './defaults.js';
+import { RUNNER_DEFAULTS, ELEMENT_WAIT, ELEMENT_RETRIES, NETWORK_IDLE_TIMEOUT, DEFAULT_OUTPUT_DIR } from './defaults.js';
 
 // ── Types ───────────────────────────────────────────────────────
 
@@ -35,12 +36,28 @@ export interface RunResult {
 
 // ── Runner ──────────────────────────────────────────────────────
 
+/**
+ * Mutable handle to the current browser context and page.
+ * Passed through the call chain so session save/clear can
+ * tear down and recreate the context mid-run.
+ */
+interface BrowserHandle {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+}
+
 export class PatrolRunner {
   private config: Required<
-    Pick<RunnerConfig, 'baseUrl' | 'viewportWidth' | 'viewportHeight' | 'browser' | 'headless' | 'fullPage' | 'idleWait'>
+    Pick<RunnerConfig, 'baseUrl' | 'viewportWidth' | 'viewportHeight' | 'browser' | 'headless' | 'fullPage'>
   > & {
     device?: string;
     ignoreHTTPSErrors?: boolean;
+    waitForSelector?: string;
+    retries?: number;
+    idleWait?: number;
+    domSettleTimeout: number;
+    domSettleMax: number;
   };
 
   private outputDir: string;
@@ -64,9 +81,13 @@ export class PatrolRunner {
       browser: config.browser ?? RUNNER_DEFAULTS.browser,
       headless: config.headless ?? RUNNER_DEFAULTS.headless,
       fullPage: config.fullPage ?? RUNNER_DEFAULTS.fullPage,
-      idleWait: config.idleWait ?? RUNNER_DEFAULTS.idleWait,
       device: config.device,
       ignoreHTTPSErrors: config.ignoreHTTPSErrors,
+      waitForSelector: config.waitForSelector,
+      retries: config.retries,
+      idleWait: config.idleWait,
+      domSettleTimeout: config.domSettleTimeout ?? RUNNER_DEFAULTS.domSettleTimeout,
+      domSettleMax: config.domSettleMax ?? RUNNER_DEFAULTS.domSettleMax,
     };
 
     this.outputDir = outputDir ?? DEFAULT_OUTPUT_DIR;
@@ -88,97 +109,160 @@ export class PatrolRunner {
 
   async run(browser: Browser, pages: PageConfig[]): Promise<RunResult> {
     this.reset();
-    fs.mkdirSync(this.screenshotDir, { recursive: true });
-    fs.mkdirSync(this.logDir, { recursive: true });
+    await fs.mkdir(this.screenshotDir, { recursive: true });
+    await fs.mkdir(this.logDir, { recursive: true });
 
     const gitignorePath = path.join(this.outputDir, '.gitignore');
-    if (!fs.existsSync(gitignorePath)) {
-      fs.writeFileSync(gitignorePath, '*\n', 'utf-8');
+    if (!existsSync(gitignorePath)) {
+      await fs.writeFile(gitignorePath, '*\n', 'utf-8');
     }
 
     this.hasSession = false;
-    if (fs.existsSync(this.sessionStatePath)) {
-      fs.unlinkSync(this.sessionStatePath);
+    if (existsSync(this.sessionStatePath)) {
+      await fs.unlink(this.sessionStatePath);
     }
 
-    let context: BrowserContext | null = null;
-    let page: Page | null = null;
+    let handle = await this.createHandle(browser);
 
     for (let pi = 0; pi < pages.length; pi++) {
       const pageConfig = pages[pi];
-
-      if (pageConfig.clearSession) {
-        console.log(`  🔓 Clearing session`);
-        if (context) {
-          await context.close();
-          context = null;
-          page = null;
-        }
-        if (fs.existsSync(this.sessionStatePath)) {
-          fs.unlinkSync(this.sessionStatePath);
-        }
-        this.hasSession = false;
-      }
-
-      if (!context) {
-        const opts = this.buildContextOptions();
-        if (this.hasSession && fs.existsSync(this.sessionStatePath)) {
-          (opts as Record<string, unknown>).storageState = this.sessionStatePath;
-        }
-        context = await browser.newContext(opts);
-        page = await context.newPage();
-      }
-
-      await this.runPage(page!, pageConfig, pi, pages.length);
-
-      if (pageConfig.saveSession && context) {
-        console.log(`  💾 Saving session`);
-        await context.storageState({ path: this.sessionStatePath });
-        this.hasSession = true;
-        await context.close();
-        context = null;
-        page = null;
-      }
+      handle = await this.runPage(handle, pageConfig, pi, pages.length);
     }
 
-    if (context) {
-      await context.close();
-    }
+    await handle.context.close();
 
     const result = this.buildResult();
-    this.writeLog(result);
-    this.writePageConfigs(pages);
+    await this.writeLog(result);
+    await this.writePageConfigs(pages);
     this.printSummary(result);
     return result;
   }
 
+  /** Create a fresh browser context + page, restoring session if available. */
+  private async createHandle(browser: Browser): Promise<BrowserHandle> {
+    const opts = this.buildContextOptions();
+    if (this.hasSession && existsSync(this.sessionStatePath)) {
+      (opts as Record<string, unknown>).storageState = this.sessionStatePath;
+    }
+    const context = await browser.newContext(opts);
+    const page = await context.newPage();
+    return { browser, context, page };
+  }
+
+  /**
+   * Save the current session and recreate the context so the next page
+   * picks up the saved storageState.
+   */
+  private async saveSession(handle: BrowserHandle): Promise<BrowserHandle> {
+    console.log(`  💾 Saving session`);
+    await handle.context.storageState({ path: this.sessionStatePath });
+    this.hasSession = true;
+    await handle.context.close();
+    return this.createHandle(handle.browser);
+  }
+
+  /**
+   * Clear the saved session and recreate the context without any stored state.
+   */
+  private async clearSession(handle: BrowserHandle): Promise<BrowserHandle> {
+    console.log(`  🔓 Clearing session`);
+    await handle.context.close();
+    if (existsSync(this.sessionStatePath)) {
+      await fs.unlink(this.sessionStatePath);
+    }
+    this.hasSession = false;
+    return this.createHandle(handle.browser);
+  }
+
+  /**
+   * Wait for the page to be ready for interaction/screenshots.
+   *
+   * Strategy (in order of priority):
+   * 1. If `waitForSelector` is set (page-level or global), wait for that selector to be visible.
+   * 2. Otherwise: networkidle → DOM settle detection → optional idleWait buffer.
+   */
   private async waitForIdle(page: Page, pageConfig?: PageConfig): Promise<void> {
+    // Strategy 1: explicit selector
+    const selector = pageConfig?.waitForSelector ?? this.config.waitForSelector;
+    if (selector) {
+      try {
+        await page.locator(selector).first().waitFor({ state: 'visible', timeout: NETWORK_IDLE_TIMEOUT });
+      } catch {
+        // Selector didn't appear in time — move on rather than failing the whole page.
+      }
+      return;
+    }
+
+    // Wait for network to quiet down first
     try {
       await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT });
     } catch {
       // Network didn't fully settle (WebSocket, SSE, polling) — move on.
     }
+
+    // Strategy 2: DOM settle detection via MutationObserver
+    const settleTimeout = pageConfig?.domSettleTimeout ?? this.config.domSettleTimeout;
+    const settleMax = pageConfig?.domSettleMax ?? this.config.domSettleMax;
+
+    await page.evaluate(({ settleTimeout, settleMax }) => {
+      return new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const maxTimer = setTimeout(() => {
+          observer.disconnect();
+          resolve();
+        }, settleMax);
+
+        const observer = new MutationObserver(() => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            observer.disconnect();
+            clearTimeout(maxTimer);
+            resolve();
+          }, settleTimeout);
+        });
+
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        });
+
+        timer = setTimeout(() => {
+          observer.disconnect();
+          clearTimeout(maxTimer);
+          resolve();
+        }, settleTimeout);
+      });
+    }, { settleTimeout, settleMax });
+
+    // Optional final buffer after DOM settles
     const wait = pageConfig?.idleWait ?? this.config.idleWait;
-    if (wait > 0) {
+    if (wait && wait > 0) {
       await page.waitForTimeout(wait);
     }
   }
 
-  private async runPage(page: Page, pageConfig: PageConfig, pageIndex: number, totalPages: number): Promise<void> {
-    const consoleCapture = createConsoleCapture(page);
+  private async runPage(
+    handle: BrowserHandle,
+    pageConfig: PageConfig,
+    pageIndex: number,
+    totalPages: number,
+  ): Promise<BrowserHandle> {
+    const consoleCapture = createConsoleCapture(handle.page);
     const base = this.config.baseUrl;
     const prefix = `[${pageIndex + 1}/${totalPages}]`;
 
     console.log(`\n${prefix} 📄 ${pageConfig.name} (${pageConfig.path})`);
 
     const navStart = Date.now();
-    await page.goto(`${base}${pageConfig.path}`, { waitUntil: 'networkidle' });
-    await this.waitForIdle(page, pageConfig);
+    await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
+    await this.waitForIdle(handle.page, pageConfig);
 
     const navSs = getNavScreenshotPath(pageConfig);
     const navFullPath = path.join(this.screenshotDir, navSs);
-    fs.mkdirSync(path.dirname(navFullPath), { recursive: true });
-    await page.screenshot({ path: navFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
+    await fs.mkdir(path.dirname(navFullPath), { recursive: true });
+    await handle.page.screenshot({ path: navFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
 
     const navMs = Date.now() - navStart;
     console.log(`  📸 navigate (${navMs}ms)`);
@@ -191,37 +275,64 @@ export class PatrolRunner {
       browserConsole: this.filterExpectedErrors(consoleCapture.flush(), pageConfig),
     });
 
-    await this.runActionGroups(page, pageConfig, consoleCapture);
+    handle = await this.runActionGroups(handle, pageConfig, consoleCapture);
     consoleCapture.detach();
+    return handle;
+  }
+
+  /**
+   * Locate an element with retry logic.
+   * Returns the locator if found, or null after all retries are exhausted.
+   */
+  private async locateWithRetry(
+    page: Page,
+    selector: string,
+    nth: number,
+    maxRetries: number,
+  ): Promise<import('@playwright/test').Locator | null> {
+    const loc = page.locator(selector).nth(nth);
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const isFound = await loc
+        .waitFor({ state: 'visible', timeout: ELEMENT_WAIT })
+        .then(() => true)
+        .catch(() => false);
+
+      if (isFound) return loc;
+
+      if (attempt < maxRetries) {
+        console.log(`    ↻ Retry ${attempt + 1}/${maxRetries} for: ${selector}`);
+      }
+    }
+
+    return null;
   }
 
   private async runActionGroups(
-    page: Page,
+    handle: BrowserHandle,
     pageConfig: PageConfig,
     consoleCapture: ReturnType<typeof createConsoleCapture>,
-  ): Promise<void> {
+  ): Promise<BrowserHandle> {
     const base = this.config.baseUrl;
 
     for (let gi = 0; gi < pageConfig.actionGroups.length; gi++) {
       const group = pageConfig.actionGroups[gi];
 
       if (gi > 0) {
-        await page.goto(`${base}${pageConfig.path}`, { waitUntil: 'networkidle' });
-        await this.waitForIdle(page, pageConfig);
+        await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
+        await this.waitForIdle(handle.page, pageConfig);
       }
 
       for (let ai = 0; ai < group.actions.length; ai++) {
         const action = group.actions[ai];
+        const maxRetries = pageConfig.retries ?? this.config.retries ?? ELEMENT_RETRIES;
+        const nth = action.nth ?? 0;
 
         try {
           const actionStart = Date.now();
-          const loc = page.locator(action.selector).first();
-          const isFound = await loc
-            .waitFor({ state: 'visible', timeout: ELEMENT_WAIT })
-            .then(() => true)
-            .catch(() => false);
+          const loc = await this.locateWithRetry(handle.page, action.selector, nth, maxRetries);
 
-          if (!isFound) {
+          if (!loc) {
             console.log(`  ⚪ MISSING: ${action.label}`);
             this.addEntry({
               page: pageConfig.path,
@@ -241,25 +352,25 @@ export class PatrolRunner {
           }
 
           if (action.waitAfter) {
-            await page.waitForTimeout(action.waitAfter);
+            await handle.page.waitForTimeout(action.waitAfter);
           } else {
-            await this.waitForIdle(page, pageConfig);
+            await this.waitForIdle(handle.page, pageConfig);
           }
 
           const ss = getActionScreenshotPath(pageConfig, group, action, ai);
           const ssFullPath = path.join(this.screenshotDir, ss);
-          fs.mkdirSync(path.dirname(ssFullPath), { recursive: true });
+          await fs.mkdir(path.dirname(ssFullPath), { recursive: true });
 
           if (action.screenshotSelector) {
-            const target = page.locator(action.screenshotSelector).first();
+            const target = handle.page.locator(action.screenshotSelector).nth(0);
             const isVisible = await target.isVisible().catch(() => false);
             if (isVisible) {
               await target.screenshot({ path: ssFullPath });
             } else {
-              await page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
+              await handle.page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
             }
           } else {
-            await page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
+            await handle.page.screenshot({ path: ssFullPath, fullPage: pageConfig.fullPage ?? this.config.fullPage });
           }
 
           this.addEntry({
@@ -275,9 +386,28 @@ export class PatrolRunner {
           const actionType = action.typeText !== undefined ? 'type' : 'click';
           console.log(`  📸 ${actionType}: ${action.label} (${actionMs}ms)`);
 
-          if (action.navigatesAway) {
-            await page.goto(`${base}${pageConfig.path}`, { waitUntil: 'networkidle' });
-            await this.waitForIdle(page, pageConfig);
+          // Session management — happens immediately after the action
+          if (action.saveSession) {
+            consoleCapture.detach();
+            handle = await this.saveSession(handle);
+            consoleCapture = createConsoleCapture(handle.page);
+            // Navigate back since we have a fresh context
+            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
+            await this.waitForIdle(handle.page, pageConfig);
+          }
+
+          if (action.clearSession) {
+            consoleCapture.detach();
+            handle = await this.clearSession(handle);
+            consoleCapture = createConsoleCapture(handle.page);
+            // Navigate back since we have a fresh context
+            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
+            await this.waitForIdle(handle.page, pageConfig);
+          }
+
+          if (action.navigatesAway && !action.saveSession && !action.clearSession) {
+            await handle.page.goto(`${base}${pageConfig.path}`, { waitUntil: 'domcontentloaded' });
+            await this.waitForIdle(handle.page, pageConfig);
           }
         } catch (err) {
           console.log(`  ❌ ERROR: ${action.label} — ${String(err).substring(0, 100)}`);
@@ -292,6 +422,8 @@ export class PatrolRunner {
         }
       }
     }
+
+    return handle;
   }
 
   private buildContextOptions(): Record<string, unknown> {
@@ -357,12 +489,12 @@ export class PatrolRunner {
     };
   }
 
-  private writeLog(result: RunResult): void {
-    fs.writeFileSync(path.join(this.logDir, 'ui-patrol-log.json'), JSON.stringify(result, null, 2), 'utf-8');
+  private async writeLog(result: RunResult): Promise<void> {
+    await fs.writeFile(path.join(this.logDir, 'ui-patrol-log.json'), JSON.stringify(result, null, 2), 'utf-8');
   }
 
-  private writePageConfigs(pages: PageConfig[]): void {
-    fs.writeFileSync(path.join(this.logDir, 'ui-patrol-pages.json'), JSON.stringify(pages, null, 2), 'utf-8');
+  private async writePageConfigs(pages: PageConfig[]): Promise<void> {
+    await fs.writeFile(path.join(this.logDir, 'ui-patrol-pages.json'), JSON.stringify(pages, null, 2), 'utf-8');
   }
 
   private printSummary(result: RunResult): void {

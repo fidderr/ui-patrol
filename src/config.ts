@@ -16,7 +16,7 @@ export interface Action {
   navigatesAway?: boolean;
   /** If set, fills the element with this text instead of clicking */
   typeText?: string;
-  /** Milliseconds to wait after the action before taking a screenshot. If not set, waits for network idle + idleWait instead. */
+  /** Milliseconds to wait after the action before taking a screenshot. If not set, uses the default wait strategy (network idle + DOM settle + idleWait). */
   waitAfter?: number;
   /**
    * CSS selector of the element to screenshot instead of the full page.
@@ -24,6 +24,23 @@ export interface Action {
    * If not set, takes a full page (or viewport) screenshot.
    */
   screenshotSelector?: string;
+  /**
+   * Which match to interact with when the selector matches multiple elements.
+   * 0-based index. Default: 0 (first match).
+   * Use this instead of relying on implicit .first() when your selector isn't unique.
+   */
+  nth?: number;
+  /**
+   * Save the browser session (cookies, localStorage) after this action completes.
+   * Use on the submit action of a login flow so subsequent pages run authenticated.
+   * The session persists for all following pages until a `clearSession` action is encountered.
+   */
+  saveSession?: boolean;
+  /**
+   * Clear the saved browser session after this action completes.
+   * Use on a logout action to wipe cookies/localStorage so subsequent pages run as guest.
+   */
+  clearSession?: boolean;
   /** What the screenshot should show after this action (for LLM review) */
   expectation: string;
   /** Visual check categories the LLM should evaluate (for LLM review) */
@@ -58,23 +75,31 @@ export interface PageConfig {
    */
   expectedErrors?: string[];
   /**
-   * Save the browser session (cookies, localStorage) after visiting this page.
-   * Use this on your login page so subsequent pages run authenticated.
-   * The session persists for all following pages until `clearSession` is encountered.
-   */
-  saveSession?: boolean;
-  /**
-   * Clear the saved browser session before visiting this page.
-   * Use this to go back to a guest/unauthenticated state.
-   * The page and all following pages run without any saved session.
-   */
-  clearSession?: boolean;
-  /**
-   * Override the idle wait for this page (milliseconds).
-   * Time to wait after network goes idle before taking screenshots.
-   * Use for pages with slow rendering or heavy post-load processing.
+   * Extra milliseconds to wait after the DOM has settled on this page.
+   * Runs after network idle + DOM settle detection. Default: 0 (off).
    */
   idleWait?: number;
+  /**
+   * Override how long the DOM must be quiet before this page is considered settled (ms).
+   * Default: 200.
+   */
+  domSettleTimeout?: number;
+  /**
+   * Override the maximum time to wait for the DOM to settle on this page (ms).
+   * Default: 5000.
+   */
+  domSettleMax?: number;
+  /**
+   * CSS selector to wait for instead of the default wait strategy (networkidle + DOM settle + idleWait).
+   * The runner waits until this selector is visible before taking screenshots.
+   * Much more reliable for SPAs with websockets, polling, or SSE.
+   */
+  waitForSelector?: string;
+  /**
+   * Number of retries when locating an element before marking it missing.
+   * Each retry waits for the element wait timeout. Default: 2.
+   */
+  retries?: number;
   /**
    * Override full-page screenshot for this page.
    * Set to false to capture only the visible viewport instead of the full scrollable page.
@@ -104,11 +129,38 @@ export interface RunnerConfig {
   /** Whether to ignore HTTPS errors (useful for self-signed certs, default: false) */
   ignoreHTTPSErrors?: boolean;
   /**
-   * Extra milliseconds to wait after network goes idle, before taking a screenshot.
-   * Gives the UI time to re-render with fetched data.
-   * Default: 2000. Can be overridden per page via PageConfig.idleWait.
+   * Extra milliseconds to wait after the DOM has settled, before taking a screenshot.
+   * Runs after network idle + DOM settle detection. Useful as a final safety buffer
+   * for pages with delayed rendering that MutationObserver can't catch (e.g. canvas, WebGL).
+   * Default: 0 (off). Can be overridden per page via PageConfig.idleWait.
    */
   idleWait?: number;
+  /**
+   * How long the DOM must be quiet (no mutations) before the page is considered settled (ms).
+   * After network goes idle, the runner watches for DOM changes via MutationObserver.
+   * Once nothing changes for this duration, it takes the screenshot.
+   * Default: 200. Can be overridden per page via PageConfig.domSettleTimeout.
+   */
+  domSettleTimeout?: number;
+  /**
+   * Maximum time to wait for the DOM to settle after network idle (ms).
+   * If the DOM keeps changing beyond this (e.g. animations, live tickers),
+   * the runner gives up and takes the screenshot anyway.
+   * Default: 5000. Can be overridden per page via PageConfig.domSettleMax.
+   */
+  domSettleMax?: number;
+  /**
+   * Global CSS selector to wait for instead of the default wait strategy (networkidle + DOM settle + idleWait).
+   * The runner waits until this selector is visible before taking screenshots.
+   * Can be overridden per page via PageConfig.waitForSelector.
+   */
+  waitForSelector?: string;
+  /**
+   * Number of retries when locating an element before marking it missing.
+   * Each retry waits for the element wait timeout. Default: 2.
+   * Can be overridden per page via PageConfig.retries.
+   */
+  retries?: number;
 }
 
 // ── Review config ───────────────────────────────────────────────
@@ -127,6 +179,12 @@ export interface ReviewConfig {
   instructions?: string;
   /** Request timeout in milliseconds (default: 300000) */
   timeout?: number;
+  /**
+   * A description of your application, included in LLM prompts to give the
+   * reviewer context about what it's looking at.
+   * Example: "E-commerce platform with product catalog, shopping cart, and checkout flow."
+   */
+  appDescription?: string;
 }
 
 // ── Unified project config ──────────────────────────────────────
