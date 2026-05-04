@@ -139,7 +139,11 @@ async function discoverElements(page: Page): Promise<{ elements: DiscoveredEleme
         if (role) return `[role="${role}"]:has-text("${txt}")`;
         return `${tag}:has-text("${txt}")`;
       }
-      return tag;
+      // Fall back to first class name if available
+      const cls = el.classList?.[0];
+      if (cls) return `${tag}.${cls}`;
+      // Can't build a unique selector — skip this element
+      return '';
     }
 
     function vis(el: Element): boolean {
@@ -152,6 +156,11 @@ async function discoverElements(page: Page): Promise<{ elements: DiscoveredEleme
     function add(el: Element, tag: string, extra: Partial<DiscoveredElement> = {}) {
       if (!vis(el)) return;
       const s = sel(el);
+      if (!s) {
+        // No unique selector could be built — skip this element
+        duplicatesSkipped++;
+        return;
+      }
       if (seen.has(s)) {
         // Non-unique selector — skip silently to avoid duplicate actions.
         // The first match wins. Use data-testid or id for uniqueness.

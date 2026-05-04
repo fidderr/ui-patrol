@@ -249,37 +249,47 @@ export class PatrolRunner {
     });
 
     // 2. DOM settle — MutationObserver, wait for quiet period
-    await page.evaluate(({ domIdleWait, domIdleMax }) => {
-      return new Promise<void>((resolve) => {
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        const maxTimer = setTimeout(() => {
-          observer.disconnect();
-          resolve();
-        }, domIdleMax);
+    try {
+      await page.evaluate(({ domIdleWait, domIdleMax }) => {
+        return new Promise<void>((resolve) => {
+          // document.body may not exist during mid-navigation
+          if (!document.body) {
+            resolve();
+            return;
+          }
 
-        const observer = new MutationObserver(() => {
-          if (timer) clearTimeout(timer);
+          let timer: ReturnType<typeof setTimeout> | null = null;
+          const maxTimer = setTimeout(() => {
+            observer.disconnect();
+            resolve();
+          }, domIdleMax);
+
+          const observer = new MutationObserver(() => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+              observer.disconnect();
+              clearTimeout(maxTimer);
+              resolve();
+            }, domIdleWait);
+          });
+
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            characterData: true,
+          });
+
           timer = setTimeout(() => {
             observer.disconnect();
             clearTimeout(maxTimer);
             resolve();
           }, domIdleWait);
         });
-
-        observer.observe(document.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          characterData: true,
-        });
-
-        timer = setTimeout(() => {
-          observer.disconnect();
-          clearTimeout(maxTimer);
-          resolve();
-        }, domIdleWait);
-      });
-    }, { domIdleWait, domIdleMax });
+      }, { domIdleWait, domIdleMax });
+    } catch {
+      // page.evaluate can fail if the page is navigating — move on
+    }
 
     // 3. Wait for selector (if set)
     if (waitForSelector) {

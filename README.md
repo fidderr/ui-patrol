@@ -305,7 +305,8 @@ Any OpenAI-compatible `/v1/chat/completions` endpoint works:
 | `--viewport-only` | Viewport-only screenshots |
 | `--wait-for <selector>` | CSS selector to also wait for after networkidle + DOM settle |
 | `--retries <n>` | Retries per element before marking missing |
-| `--network-idle-wait <ms>` | Max ms to wait for network to go quiet |
+| `--network-idle-wait <ms>` | Ms the network must be quiet before settled |
+| `--network-idle-max <ms>` | Max ms to wait for network to settle |
 | `--dom-idle-wait <ms>` | Ms the DOM must be quiet before settled |
 | `--dom-idle-max <ms>` | Max ms to wait for DOM to settle |
 | `--review` | Also run LLM review after screenshots |
