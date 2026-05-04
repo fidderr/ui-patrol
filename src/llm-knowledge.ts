@@ -25,9 +25,10 @@ interface FieldDef {
  * Mirrors the SharedOptions interface in config.ts.
  */
 const SHARED_FIELDS: FieldDef[] = [
-  { name: 'networkIdleWait', type: 'number',   required: false, description: 'max ms to wait for network to go quiet (default: 100)' },
+  { name: 'networkIdleWait', type: 'number',   required: false, description: 'ms the network must be quiet (zero pending requests) before considered settled (default: 100)' },
+  { name: 'networkIdleMax', type: 'number',   required: false, description: 'max ms to wait for network to settle — gives up if requests keep firing (default: 20000)' },
   { name: 'domIdleWait',     type: 'number',   required: false, description: 'ms the DOM must be quiet (no mutations) before considered settled (default: 100)' },
-  { name: 'domIdleMax',      type: 'number',   required: false, description: 'max ms to wait for DOM to settle — gives up if DOM keeps changing (default: 5000)' },
+  { name: 'domIdleMax',      type: 'number',   required: false, description: 'max ms to wait for DOM to settle — gives up if DOM keeps changing (default: 20000)' },
   { name: 'waitForSelector', type: 'string',   required: false, description: 'CSS selector to also wait for after networkidle + DOM settle (all three run in sequence)' },
   { name: 'fullPage',        type: 'boolean',  required: false, description: 'false to capture viewport only instead of full scrollable page' },
   { name: 'retries',         type: 'number',   required: false, description: 'retries per element before marking missing (default: 2)' },

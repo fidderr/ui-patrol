@@ -9,8 +9,10 @@
 // Behavioral fields shared across Action, PageConfig, and RunnerConfig.
 
 export interface SharedOptions {
-  /** Max ms to wait for network to go quiet (no pending requests for 500ms). Default: 100. */
+  /** Ms the network must be quiet (zero pending requests) before considered settled. Default: 100. */
   networkIdleWait?: number;
+  /** Max ms to wait for network to settle. Gives up if requests keep firing. Default: 5000. */
+  networkIdleMax?: number;
   /** Ms the DOM must be quiet (no mutations) before considered settled. Default: 100. */
   domIdleWait?: number;
   /** Max ms to wait for DOM to settle. Gives up if DOM keeps changing. Default: 5000. */

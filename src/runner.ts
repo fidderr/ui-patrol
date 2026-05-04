@@ -52,6 +52,7 @@ export class PatrolRunner {
     waitForSelector?: string;
     retries?: number;
     networkIdleWait: number;
+    networkIdleMax: number;
     domIdleWait: number;
     domIdleMax: number;
     screenshot?: boolean;
@@ -84,6 +85,7 @@ export class PatrolRunner {
       waitForSelector: config.waitForSelector,
       retries: config.retries,
       networkIdleWait: config.networkIdleWait ?? RUNNER_DEFAULTS.networkIdleWait,
+      networkIdleMax: config.networkIdleMax ?? RUNNER_DEFAULTS.networkIdleMax,
       domIdleWait: config.domIdleWait ?? RUNNER_DEFAULTS.domIdleWait,
       domIdleMax: config.domIdleMax ?? RUNNER_DEFAULTS.domIdleMax,
       screenshot: config.screenshot,
@@ -174,6 +176,7 @@ export class PatrolRunner {
     if (action) {
       return {
         networkIdleWait: action.networkIdleWait ?? this.config.networkIdleWait,
+        networkIdleMax: action.networkIdleMax ?? this.config.networkIdleMax,
         domIdleWait: action.domIdleWait ?? this.config.domIdleWait,
         domIdleMax: action.domIdleMax ?? this.config.domIdleMax,
         waitForSelector: action.waitForSelector ?? this.config.waitForSelector,
@@ -181,6 +184,7 @@ export class PatrolRunner {
     }
     return {
       networkIdleWait: pageConfig.networkIdleWait ?? this.config.networkIdleWait,
+      networkIdleMax: pageConfig.networkIdleMax ?? this.config.networkIdleMax,
       domIdleWait: pageConfig.domIdleWait ?? this.config.domIdleWait,
       domIdleMax: pageConfig.domIdleMax ?? this.config.domIdleMax,
       waitForSelector: pageConfig.waitForSelector ?? this.config.waitForSelector,
@@ -196,16 +200,55 @@ export class PatrolRunner {
    * 3. If `waitForSelector` is set, wait for that selector to be visible
    */
   private async waitForIdle(page: Page, pageConfig: PageConfig, action?: Action): Promise<void> {
-    const { networkIdleWait, domIdleWait, domIdleMax, waitForSelector } = this.resolveWaitParams(pageConfig, action);
+    const { networkIdleWait, networkIdleMax, domIdleWait, domIdleMax, waitForSelector } = this.resolveWaitParams(pageConfig, action);
 
-    // 1. Network idle
-    try {
-      await page.waitForLoadState('networkidle', { timeout: networkIdleWait });
-    } catch {
-      // Network didn't fully settle — move on.
-    }
+    // 1. Network idle — track pending requests, wait for quiet period
+    await new Promise<void>((resolve) => {
+      let pending = 0;
+      let timer: ReturnType<typeof setTimeout> | null = null;
 
-    // 2. DOM settle
+      const maxTimer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, networkIdleMax);
+
+      const resetTimer = () => {
+        if (timer) clearTimeout(timer);
+        if (pending === 0) {
+          timer = setTimeout(() => {
+            cleanup();
+            resolve();
+          }, networkIdleWait);
+        }
+      };
+
+      const onRequest = () => {
+        pending++;
+        if (timer) { clearTimeout(timer); timer = null; }
+      };
+
+      const onRequestDone = () => {
+        pending = Math.max(0, pending - 1);
+        resetTimer();
+      };
+
+      const cleanup = () => {
+        clearTimeout(maxTimer);
+        if (timer) clearTimeout(timer);
+        page.removeListener('request', onRequest);
+        page.removeListener('requestfinished', onRequestDone);
+        page.removeListener('requestfailed', onRequestDone);
+      };
+
+      page.on('request', onRequest);
+      page.on('requestfinished', onRequestDone);
+      page.on('requestfailed', onRequestDone);
+
+      // Start the initial quiet timer (network may already be idle)
+      resetTimer();
+    });
+
+    // 2. DOM settle — MutationObserver, wait for quiet period
     await page.evaluate(({ domIdleWait, domIdleMax }) => {
       return new Promise<void>((resolve) => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -241,7 +284,7 @@ export class PatrolRunner {
     // 3. Wait for selector (if set)
     if (waitForSelector) {
       try {
-        await page.locator(waitForSelector).first().waitFor({ state: 'visible', timeout: networkIdleWait });
+        await page.locator(waitForSelector).first().waitFor({ state: 'visible', timeout: networkIdleMax });
       } catch {
         // Selector didn't appear in time — move on.
       }

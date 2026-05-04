@@ -83,7 +83,8 @@ EXAMPLES:
 RUN OPTIONS (continued):
   --wait-for <selector> CSS selector to also wait for after networkidle + DOM settle
   --retries <n>         Retries per element before marking missing (default: 2)
-  --network-idle-wait <ms>  Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
+  --network-idle-wait <ms>  Ms the network must be quiet before settled (default: ${RUNNER_DEFAULTS.networkIdleWait})
+  --network-idle-max <ms>   Max ms to wait for network to settle (default: ${RUNNER_DEFAULTS.networkIdleMax})
   --dom-idle-wait <ms>      Ms the DOM must be quiet before screenshotting (default: ${RUNNER_DEFAULTS.domIdleWait})
   --dom-idle-max <ms>       Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
 
@@ -325,8 +326,11 @@ ${exportLine}
     // Max ms to wait for DOM to settle (default: ${RUNNER_DEFAULTS.domIdleMax})
     // domIdleMax: ${RUNNER_DEFAULTS.domIdleMax},
 
-    // Max ms to wait for network to go quiet (default: ${RUNNER_DEFAULTS.networkIdleWait})
+    // Ms the network must be quiet before considered settled (default: ${RUNNER_DEFAULTS.networkIdleWait})
     // networkIdleWait: ${RUNNER_DEFAULTS.networkIdleWait},
+
+    // Max ms to wait for network to settle (default: ${RUNNER_DEFAULTS.networkIdleMax})
+    // networkIdleMax: ${RUNNER_DEFAULTS.networkIdleMax},
 
     // CSS selector to also wait for after networkidle + DOM settle
     // waitForSelector: '#app',
@@ -558,6 +562,7 @@ async function runCommand(args: Record<string, string>): Promise<void> {
   if (args['wait-for']) runnerConfig.waitForSelector = args['wait-for'];
   if (args['retries']) runnerConfig.retries = parseInt(args['retries'], 10);
   if (args['network-idle-wait']) runnerConfig.networkIdleWait = parseInt(args['network-idle-wait'], 10);
+  if (args['network-idle-max']) runnerConfig.networkIdleMax = parseInt(args['network-idle-max'], 10);
   if (args['dom-idle-wait']) runnerConfig.domIdleWait = parseInt(args['dom-idle-wait'], 10);
   if (args['dom-idle-max']) runnerConfig.domIdleMax = parseInt(args['dom-idle-max'], 10);
 

@@ -52,8 +52,8 @@ npx ui-patrol example         # regenerate example pages.json
 
 After every navigation and action, the runner waits for the page to be ready:
 
-1. **Network idle** — Playwright waits until zero pending network requests for 500ms (handles async API calls automatically)
-2. **DOM settle** — A MutationObserver watches the DOM. Once no mutations happen for `domIdleWait` ms (default: 100ms), the page is considered settled. If the DOM keeps changing for longer than `domIdleMax` (default: 5000ms), it gives up and moves on.
+1. **Network idle** — Tracks all pending network requests. Once zero requests are in flight for `networkIdleWait` ms (default: 100ms), the network is considered settled. If a new request starts during the quiet period, the timer resets. Safety cap: `networkIdleMax` (default: 20000ms).
+2. **DOM settle** — A MutationObserver watches the DOM. Once no mutations happen for `domIdleWait` ms (default: 100ms), the page is considered settled. If the DOM changes during the quiet period, the timer resets. Safety cap: `domIdleMax` (default: 20000ms).
 3. **waitForSelector** — If set, waits for the specified CSS selector to be visible after network idle and DOM settle.
 4. **Screenshot**
 
@@ -80,7 +80,8 @@ Each page is an object in the array. Pages execute in order.
 | `checks` | `string[]` | **yes** | Plain English checks for the LLM to verify |
 | `actionGroups` | `ActionGroup[]` | **yes** | Groups of UI interactions (can be empty `[]`) |
 | `expectedErrors` | `string[]` | no | Regex patterns for expected console errors on page navigation |
-| `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
+| `networkIdleWait` | `number` | no | Override: ms the network must be quiet before settled |
+| `networkIdleMax` | `number` | no | Override: max ms to wait for network to settle |
 | `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
 | `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
 | `waitForSelector` | `string` | no | Override: CSS selector to also wait for after networkidle + DOM settle |
@@ -116,7 +117,8 @@ A single UI interaction (click or type).
 | `saveSession` | `boolean` | no | Save browser session after this action completes |
 | `clearSession` | `boolean` | no | Clear browser session after this action completes |
 | `expectedErrors` | `string[]` | no | Regex patterns for expected console errors after this action |
-| `networkIdleWait` | `number` | no | Override: max ms to wait for network to go quiet |
+| `networkIdleWait` | `number` | no | Override: ms the network must be quiet before settled |
+| `networkIdleMax` | `number` | no | Override: max ms to wait for network to settle |
 | `domIdleWait` | `number` | no | Override: ms the DOM must be quiet before settled |
 | `domIdleMax` | `number` | no | Override: max ms to wait for DOM to settle |
 | `waitForSelector` | `string` | no | Override: CSS selector to also wait for after networkidle + DOM settle |
@@ -230,9 +232,10 @@ export default defineConfig({
 | `viewportWidth` | `number` | `1280` | Browser viewport width |
 | `viewportHeight` | `number` | `720` | Browser viewport height |
 | `fullPage` | `boolean` | `true` | Full-page screenshots (`false` for viewport-only) |
-| `networkIdleWait` | `number` | `100` | Max ms to wait for network to go quiet |
+| `networkIdleWait` | `number` | `100` | Ms the network must be quiet (zero pending requests) before settled |
+| `networkIdleMax` | `number` | `20000` | Max ms to wait for network to settle |
 | `domIdleWait` | `number` | `100` | Ms the DOM must be quiet before settled |
-| `domIdleMax` | `number` | `5000` | Max ms to wait for DOM to settle |
+| `domIdleMax` | `number` | `20000` | Max ms to wait for DOM to settle |
 | `waitForSelector` | `string` | — | CSS selector to also wait for after networkidle + DOM settle |
 | `retries` | `number` | `2` | Retries per element before marking missing |
 | `screenshot` | `boolean` | `true` | Set to `false` to skip all screenshots |

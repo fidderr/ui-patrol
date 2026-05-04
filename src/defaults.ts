@@ -12,12 +12,14 @@ export const RUNNER_DEFAULTS = {
   browser: 'chromium' as const,
   headless: true,
   fullPage: true,
-  /** Max ms to wait for network to go quiet (no pending requests for 500ms) */
+  /** Ms the network must be quiet (zero pending requests) before considered settled */
   networkIdleWait: 100,
+  /** Max ms to wait for network to settle — gives up if requests keep firing */
+  networkIdleMax: 20_000,
   /** Ms the DOM must be quiet (no mutations) before considered settled */
   domIdleWait: 100,
   /** Max ms to wait for DOM to settle — gives up if DOM keeps changing */
-  domIdleMax: 5_000,
+  domIdleMax: 20_000,
 } as const;
 
 /** How long to wait for an element to appear before marking it missing (ms) */
