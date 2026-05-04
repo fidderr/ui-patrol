@@ -1,6 +1,6 @@
 {
   "name": "ui-patrol",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Framework-agnostic UI testing tool.",
   "type": "module",
   "license": "MIT",
